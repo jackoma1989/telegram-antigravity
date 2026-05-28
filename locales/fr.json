@@ -1,0 +1,275 @@
+{
+  "bot": {
+    "started": "🚀 Bot à distance Antigravity démarré !\nChat ID: {chatId}\nTapez /help pour voir les commandes disponibles.",
+    "polling": "Le bot Antigravity est actif !"
+  },
+  "auth": {
+    "unauthorized": "❌ Non autorisé."
+  },
+  "help": {
+    "title": "🤖 <b>Commandes disponibles :</b>",
+    "messaging_title": "📝 <i>Messagerie et interaction :</i>",
+    "messaging_text": "- Tapez simplement du texte → Parler à l'agent\n- 📎 Envoyer une image/un fichier → Transférer à l'agent\n- /stop → Arrêter l'agent\n- /file → Ouvrir l'explorateur de fichiers\n- /turbo → Basculer le mode turbo\n- /panel → Restaurer le panneau de configuration",
+    "status_title": "👁️ <i>Statut et infos :</i>",
+    "status_text": "- /latest → Obtenir la dernière réponse\n- /screenshot → Prendre une capture d'écran de l'IDE\n- /status → État du système\n- /quota → Vérifier les quotas d'IA\n- /version → Afficher la version du bot\n- /update → Vérifier les mises à jour",
+    "ide_title": "🛠️ <i>Contrôles du système:</i>",
+    "ide_text": "- /start_ide → Démarrer l'IDE/Agent\n- /close → Fermer complètement l'application\n- /app → Basculer entre l'IDE et l'Agent\n- /workspace → Changer de projet\n- /window → Sélectionner la fenêtre active\n- /fix_shortcuts → Réparer les raccourcis\n- /lang → Changer de langue\n- /menu → Actualiser le menu\n- /cmd &lt;commande&gt; → Exécuter une commande terminal",
+    "chat_title": "💬 <i>Contrôles du Chat :</i>",
+    "chat_text": "- /new → Ouvrir un nouveau chat\n- /agents → Lister les chats récents\n- /artifacts → Lister les artefacts\n- /model → Sélectionner un modèle\n- /autoaccept → Basculer l'acceptation automatique\n- /help → Afficher ce message d'aide"
+  },
+  "ide": {
+    "already_running": "✅ L'IDE Antigravity est déjà en cours d'exécution !\n💡 Utilisez /close pour le fermer.",
+    "starting": "🔄 Démarrage de l'IDE Antigravity...",
+    "start_failed": "❌ Échec du démarrage de l'IDE : {error}",
+    "started": "✅ IDE démarré avec succès !",
+    "already_closed": "ℹ️ L'IDE est déjà fermé.",
+    "closing": "🔄 Fermeture de l'IDE...",
+    "closed": "✅ IDE complètement fermé !",
+    "not_installed": "❌ IDE Antigravity introuvable. Veuillez l'installer d'abord.",
+    "closing_window": "🪟 Fermeture de la fenêtre...",
+    "window_closed": "✅ Fenêtre fermée avec succès.",
+    "window_close_failed": "❌ Échec de la fermeture de la fenêtre. Y a-t-il une fenêtre ouverte ?"
+  },
+  "status": {
+    "title": "📊 <b>Statut du système :</b>\n",
+    "ide_running": "🟢 IDE : En cours d'exécution",
+    "ide_stopped": "🔴 IDE : Arrêté",
+    "cdp_active": "🟢 Connexion CDP : Active",
+    "cdp_inactive": "🔴 Connexion CDP : Inactive",
+    "bot_running": "🟢 Bot : En cours d'exécution",
+    "autoaccept_on": "✅ ON",
+    "autoaccept_off": "❌ OFF"
+  },
+  "latest": {
+    "title": "📝 Dernière réponse :\n\n",
+    "no_new": "[Aucun nouveau message]",
+    "error": "❌ Erreur : {error}\n(L'IDE Antigravity est-il ouvert ?)"
+  },
+  "screenshot": {
+    "taking": "📸 Prise d'une capture d'écran de l'IDE...",
+    "error": "❌ Erreur : {error}\n(L'IDE est-il ouvert ?)"
+  },
+  "ask": {
+    "empty": "Veuillez taper une question.",
+    "sent": "✅ Message envoyé, en attente de réponse...",
+    "done": "✅ Terminé !",
+    "done_empty": "✅ Terminé mais aucun texte n'a été généré.",
+    "timeout": "⚠️ L'agent réfléchit toujours ou a expiré.",
+    "send_error": "❌ Erreur d'envoi : {error}",
+    "headless_error": "❌ Erreur Headless : {error}",
+    "no_chat_input": "Aucune zone de texte trouvée. Veuillez ouvrir une session de chat."
+  },
+  "stop": {
+    "stopping": "🛑 Arrêt de l'agent...",
+    "stopped": "✅ Agent arrêté !",
+    "already_stopped": "ℹ️ L'agent est déjà arrêté.",
+    "error": "❌ Erreur : {error}"
+  },
+  "new_chat": {
+    "opened": "✅ Nouveau chat ouvert !",
+    "not_found": "❌ Bouton de nouveau chat introuvable.",
+    "error": "❌ Erreur : {error}"
+  },
+  "model": {
+    "selecting": "🔄 Sélection du modèle : {model}",
+    "changed": "✅ Modèle changé : {model}",
+    "not_found": "❌ Modèle introuvable.",
+    "select_prompt": "🤖 Sélectionnez un modèle :",
+    "changing": "🔄 Changement de modèle : {model}",
+    "select_failed": "❌ Échec de la sélection du modèle.",
+    "error": "Erreur !"
+  },
+  "workspace": {
+    "switching": "🔄 Changement d'espace de travail : {workspace}",
+    "start_failed": "❌ Échec du démarrage : {error}",
+    "started": "✅ IDE démarré avec le nouvel espace de travail !",
+    "trusted": "🔓 Espace de travail marqué comme de confiance.",
+    "cdp_warning": "\n⚠️ La connexion CDP n'est peut-être pas prête.",
+    "select_prompt": "Veuillez sélectionner l'espace de travail :",
+    "read_error": "❌ Impossible de lire le répertoire des projets.",
+    "selected": "Espace de travail sélectionné : {project}",
+    "not_found_standalone": "❌ Project '{wsName}' could not be found or opened in Standalone App."
+  },
+  "file": {
+    "empty_dir": "📂 Ce répertoire est vide.",
+    "dir_read_error": "❌ Impossible de lire le répertoire : {error}",
+    "not_found": "❌ Fichier introuvable : {path}",
+    "too_large": "❌ Fichier trop volumineux ({size}MB). Limite : 50MB.",
+    "send_failed": "❌ Impossible d'envoyer le fichier : {error}",
+    "sending": "Envoi : {filename}",
+    "parent_dir": "⬆️ Répertoire parent",
+    "prev_page": "◀️ Précédent",
+    "next_page": "▶️ Suivant",
+    "dir_info": "({count} éléments, page {page}/{totalPages})",
+    "expired": "❌ Session expirée, tapez /file pour recommencer."
+  },
+  "menu": {
+    "updated": "✅ Menu mis à jour !",
+    "help_desc": "Afficher toutes les commandes",
+    "ask_desc": "Envoyer une question à l'agent",
+    "latest_desc": "Obtenir la dernière réponse",
+    "screenshot_desc": "Prendre une capture d'écran",
+    "status_desc": "Statut du système",
+    "start_ide_desc": "Démarrer l'IDE",
+    "close_desc": "Fermer l'IDE",
+    "new_desc": "Ouvrir un nouveau chat",
+    "model_desc": "Sélection du modèle",
+    "workspace_desc": "Changer de projet",
+    "lang_desc": "Changer de langue",
+    "cmd_desc": "Exécuter une commande",
+    "file_desc": "Parcourir les fichiers",
+    "stop_desc": "Arrêter l'agent",
+    "autoaccept_desc": "Basculer l'auto-acceptation",
+    "quota_desc": "Afficher l'utilisation du quota",
+    "update_desc": "Vérifier les mises à jour",
+    "version_desc": "Afficher la version",
+    "menu_desc": "Mettre à jour le menu",
+    "close_window_desc": "Fermer la fenêtre active",
+    "agents_desc": "Lister et basculer entre les fils récents",
+    "artifacts_desc": "Lister les artefacts du fil actuel",
+    "window_desc": "Sélectionner une fenêtre IDE",
+    "restart_desc": "Redémarrer le bot",
+    "btn_screenshot": "📸 Écran",
+    "btn_artifacts": "📦 Artefacts",
+    "btn_auto_on": "⚡ Auto",
+    "btn_auto_off": "🔴 Auto",
+    "btn_latest": "💬 Réponse",
+    "start_ag_desc": "Démarrer l'Agent",
+    "close_ide_desc": "Fermer l'IDE",
+    "close_ag_desc": "Fermer l'Agent",
+    "app_desc": "Sélectionner l'application active",
+    "fix_shortcuts_desc": "Réparer les raccourcis"
+  },
+  "photo": {
+    "downloaded": "✅ Fichier téléchargé et transféré...",
+    "error": "❌ Erreur de traitement : {error}"
+  },
+  "lang": {
+    "current": "🌐 Langue actuelle : {lang}",
+    "changed": "✅ Langue changée pour : {lang}",
+    "select_prompt": "🌐 Sélectionnez la langue :"
+  },
+  "autoaccept": {
+    "enabling": "🔄 Activation de l'auto-acceptation...",
+    "enabled": "⚡ Auto-acceptation ACTIVÉE !\n\n🤖 Observateur injecté dans {injected} cibles.",
+    "enabled_none": "⚡ Auto-acceptation ACTIVÉE !\n\n⚠️ Aucune cible trouvée pour le moment.",
+    "disabling": "🔄 Désactivation de l'auto-acceptation...",
+    "disabled": "✅ Auto-acceptation DÉSACTIVÉE.\n\n📊 Total de clics : {clicks}.",
+    "status_title": "📊 <b>Statut Auto-Acceptation :</b>\n",
+    "status_enabled": "⚡ Statut : ACTIVÉ",
+    "status_disabled": "⏸️ Statut : DÉSACTIVÉ",
+    "status_active": "🤖 Observateur : Actif ({targets} cibles)",
+    "status_inactive": "📴 Observateur : Inactif",
+    "status_clicks": "🖱️ Total Clics : {total} (session: {session})",
+    "status_last_click": "⏱️ Dernier Clic : {text} (il y a {sec}s)",
+    "status_blocked": "🛡️ Commandes bloquées : {count}",
+    "status_no_panel": "⚠️ Panel de l'agent non détecté.",
+    "error": "❌ Erreur : {error}"
+  },
+  "quota": {
+    "checking": "🔄 Vérification du quota...",
+    "not_found": "❌ Informations de quota introuvables.",
+    "error": "❌ Erreur : {error}",
+    "header": "📊 Statut du Compte et Quota\n",
+    "plan": "📋 Plan : {plan}",
+    "prompt_credits": "📊 Crédits : {available}{monthly}",
+    "model_quota": "⏱️ Quota du modèle :",
+    "remaining": " {pct}% restant",
+    "empty": " ⛔ ÉPUISÉ",
+    "reset_time": " ⏳ {hours}h {mins}m"
+  },
+  "response_too_long": "⚠️ Réponse trop longue. Utilisez /latest.",
+  "window": {
+    "not_found": "Aucune fenêtre IDE trouvée. Envoyez /start_ide d'abord.",
+    "title": "<b>🔳 Fenêtres IDE</b>\n",
+    "current": "Cible actuelle : <i>{{current}}</i>",
+    "auto": "Cible : <i>auto (première disponible)</i>",
+    "found": "{{count}} fenêtre(s) trouvée(s). Appuyez pour sélectionner :",
+    "clear_btn": "🔄 Auto (effacer la préférence)",
+    "error": "Erreur de liste de fenêtres : {{error}}",
+    "cleared_toast": "Effacé — détection automatique",
+    "cleared_msg": "🔄 Préférence de fenêtre effacée. Le bot détectera automatiquement la fenêtre active.",
+    "expired": "La liste des fenêtres a expiré. Envoyez /window à nouveau.",
+    "selected_msg": "✅ Cible actuelle : <b>{{title}}</b>\n\nToutes les commandes seront dirigées vers cette fenêtre."
+  },
+  "agents": {
+    "list_title": "📂 <b>Fils de Discussion Récents :</b>\n\n",
+    "switched": "✅ Basculé vers le fil : <b>{name}</b>",
+    "not_found": "❌ Impossible de sélectionner le fil.",
+    "invalid_number": "❌ Numéro de fil invalide.",
+    "no_recent": "ℹ️ Aucun fil actif récent trouvé.",
+    "error": "❌ Erreur : {error}"
+  },
+  "artifacts": {
+    "list_title": "📎 <b>Artefacts pour le Fil Actuel :</b>\n\n",
+    "no_active_thread": "⚠️ Aucun fil actif trouvé. Veuillez d'abord sélectionner un fil dans l'IDE.",
+    "no_artifacts": "ℹ️ Aucun artefact trouvé pour le fil actuel.",
+    "invalid_number": "❌ Numéro d'artefact invalide.",
+    "sending": "📤 Envoi de l'artefact : <b>{name}</b>...",
+    "error": "❌ Erreur lors de la lecture de l'artefact : {error}"
+  },
+  "turbo": {
+    "off": "🛑 Mode Turbo Désactivé.\nRetour au mode assistant normal.",
+    "on_msg": "⚡ <b>MODE TURBO ACTIF</b> ⚡\n\n⚠️ <b>Attention:</b> Dans ce mode, vos requêtes seront traitées séquentiellement par Claude et Gemini (Planification -> Codage -> Révision). Comme les codes seront révisés et édités entre les agents, <b>plus de jetons seront consommés.</b>\n\nPour désactiver ce mode, tapez à nouveau <code>/turbo</code> ou cliquez sur le bouton du menu.",
+    "on_toast": "🚀 Mode Turbo activé !",
+    "btn_on": "🚀 Turbo ✅",
+    "btn_off": "🚀 Turbo",
+    "p1_start": "🚀 <b>Mode Turbo Démarré:</b>\n\n⏳ <b>Phase 1:</b> Sélection du modèle (Claude)...",
+    "p1_planning": "🚀 <b>Mode Turbo Démarré:</b>\n\n⏳ <b>Phase 1:</b> Claude prépare le plan...",
+    "p1_error": "Délai d'attente dépassé pour Claude lors de la phase de planification.",
+    "p2_switching": "🚀 <b>Mode Turbo Actif:</b>\n\n✅ <b>Phase 1:</b> Claude a terminé le plan.\n⏳ <b>Phase 2:</b> Changement de modèle (Gemini)...",
+    "p2_coding": "🚀 <b>Mode Turbo Actif:</b>\n\n✅ <b>Phase 1:</b> Claude a terminé le plan.\n⏳ <b>Phase 2:</b> Gemini écrit le code...",
+    "p2_error": "Délai d'attente dépassé pour Gemini lors de la phase de codage.",
+    "p3_switching": "🚀 <b>Mode Turbo Actif:</b>\n\n✅ <b>Phase 1:</b> Planification\n✅ <b>Phase 2:</b> Codage\n⏳ <b>Phase 3:</b> Changement de modèle (Claude) - Révision...",
+    "p3_reviewing": "🚀 <b>Mode Turbo Actif:</b>\n\n✅ <b>Phase 1:</b> Planification\n✅ <b>Phase 2:</b> Codage\n⏳ <b>Phase 3:</b> Claude révise le code...",
+    "p3_error": "Délai d'attente dépassé pour Claude lors de la phase de révision.",
+    "p4_switching": "🚀 <b>Mode Turbo Actif:</b>\n\n✅ <b>Phase 1:</b> Planification\n✅ <b>Phase 2:</b> Codage\n⚠️ <b>Phase 3:</b> Problèmes trouvés !\n⏳ <b>Phase 4:</b> Changement de modèle (Gemini) - Correction...",
+    "p4_fixing": "🚀 <b>Turbo Mode Active:</b>\n\n✅ <b>Phase 1:</b> Planning\n✅ <b>Phase 2:</b> Coding\n⚠️ <b>Phase 3:</b> Issues found!\n⏳ <b>Phase 4:</b> Gemini is fixing the issues...",
+    "p4_error": "Délai d'attente dépassé pour Gemini lors de la phase de correction.",
+    "done_issues": "🚀 <b>Mode Turbo Terminé:</b>\n\n✅ <b>Phase 1:</b> Planification (Claude)\n✅ <b>Phase 2:</b> Codage (Gemini)\n⚠️ <b>Phase 3:</b> Révision (Claude)\n✅ <b>Phase 4:</b> Correction (Gemini)\n\n✨ Résultats à venir...",
+    "done_no_issues": "🚀 <b>Mode Turbo Terminé:</b>\n\n✅ <b>Phase 1:</b> Planification (Claude)\n✅ <b>Phase 2:</b> Codage (Gemini)\n✅ <b>Phase 3:</b> Révision - Aucun Problème (Claude)\n\n✨ Résultats à venir...",
+    "error_title": "❌ <b>Erreur du Mode Turbo:</b>\n\n{error}",
+    "p5_summarizing": "⏳ Phase 5 : Préparation du résumé...",
+    "done_summary": "✨ Mode Turbo Terminé (Résumé prêt)",
+    "p5_error": "Délai d'attente dépassé pour la phase de résumé."
+  },
+  "restart": {
+    "closing": "🔄 Closing Antigravity windows and restarting bot..."
+  },
+  "standalone": {
+    "already_running": "🤖 Antigravity Standalone is already running!",
+    "starting": "🚀 Starting Antigravity Standalone...",
+    "started": "✅ Antigravity Standalone started successfully.",
+    "not_installed": "❌ Start failed: Antigravity Standalone does not appear to be installed.",
+    "start_failed": "❌ Start error: {error}",
+    "already_closed": "ℹ️ Antigravity Standalone is already closed.",
+    "closing": "🔌 Closing Antigravity Standalone...",
+    "closed": "✅ Antigravity Standalone closed."
+  },
+  "close": {
+    "select_prompt": "⚠️ Please specify which app to close:\n\n👉 Standalone: /close_ag\n👉 IDE (Classic): /close_ide"
+  },
+  "cmd": {
+    "empty": "Please enter a command to run. Example: /cmd ls -la",
+    "running": "⏳ Running command:\n`{cmdStr}`",
+    "no_output": "✅ Command ran successfully (No output).",
+    "output_title": "💻 Command Output:"
+  },
+  "app": {
+    "select_prompt": "Please select the application you want to control. Both applications can run simultaneously and are controlled via independent ports:\n",
+    "auto_starting": "🚀 {appName} appears to be closed. Auto-starting...",
+    "started": "✅ {appName} started successfully."
+  },
+  "shortcuts": {
+    "scanning": "⏳ Scanning and updating desktop shortcuts, please wait...",
+    "error": "❌ Error occurred while updating shortcuts:\n<code>{error}</code>",
+    "not_found": "Not found on desktop or could not be changed",
+    "success": "\n✨ <b>Success!</b> A total of <b>{count}</b> shortcuts updated. The bot will now be able to automatically connect when you launch applications from the desktop.",
+    "start_error": "❌ Process could not be started: {error}"
+  },
+  "update": {
+    "checking": "🔍 Checking for updates...",
+    "error": "❌ Update error: {error}",
+    "success": "✅ Code updated and dependencies installed.\nBot is restarting now..."
+  }
+}

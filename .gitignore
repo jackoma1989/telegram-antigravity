@@ -1,0 +1,25 @@
+# Dependency directories
+node_modules/
+
+# Local env files (MUST NEVER BE COMMITTED)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Log files
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+bg_out.log
+bg_err.log
+*.log
+
+# PM2 files
+.pm2/
+pm2.log
+
+# System files
+.DS_Store
+Thumbs.db

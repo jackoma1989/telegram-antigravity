@@ -1,0 +1,8 @@
+﻿鈼?injected env (7) from .env // tip: 鈱?custom filepath { path: '/custom/path/.env' }
+鈿?Telegram Bot Client successfully launched!
+馃 Anchored initial model: Gemini 3.5 Flash (Medium)
+馃搨 Anchored initial project: Telegravity
+鉁?Telegram menu commands successfully reset!
+馃 Logs Watcher active! Scanning brain path: C:\Users\JackoMA\.gemini\antigravity\brain
+馃摗 Anchored active session at startup: f0e264cc... (Size: 1349712B, Age: 44880s)
+馃挰 Anchored active chat title at startup: Multi-Project Telegram Chat Routing
