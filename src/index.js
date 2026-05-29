@@ -32,7 +32,8 @@ const {
     getAvailableProjectsViaCDP,
     sendImageViaCDP,
     getActiveConversationIdViaCDP,
-    waitForTargetReady
+    waitForTargetReady,
+    getRunningTasksViaCDP
 } = require('./cdp_controller');
 const { launchIDE, config } = require('./platform');
 
@@ -289,17 +290,13 @@ function getRunningTerminalTasks() {
                     const name = p.Name || '';
                     const cmdLine = p.CommandLine || '';
                     
-                    // A process is a direct child of the language server if its parent is not in our list
                     const isDirectChild = !processIdSet.has(parentPid);
                     if (!isDirectChild) continue;
                     
-                    // Filter out system and utility processes
                     const nameLower = name.toLowerCase();
                     if (nameLower === 'conhost.exe' || nameLower === 'vcxsrv.exe') continue;
                     
                     const cmdLower = cmdLine.toLowerCase();
-                    // Allow listing other index.js processes (e.g. duplicates to kill),
-                    // but skip the current active bot PID to prevent accidental self-termination.
                     if (pid === process.pid) {
                         continue;
                     }
@@ -309,7 +306,6 @@ function getRunningTerminalTasks() {
                         continue;
                     }
                     
-                    // Clean up command line for display
                     let cleanCmd = cmdLine;
                     if (nameLower === 'powershell.exe') {
                         const match = cmdLine.match(/-Command\s+"?([^"]+)"?/i) || cmdLine.match(/-c\s+"?([^"]+)"?/i);
@@ -336,6 +332,37 @@ function getRunningTerminalTasks() {
             }
         });
     });
+}
+
+async function getRunningAiTasks() {
+    try {
+        const domTasks = await getRunningTasksViaCDP(CDP_PORT).catch(() => []);
+        if (domTasks.length === 0) return [];
+        
+        const osTasks = await getRunningTerminalTasks().catch(() => []);
+        const results = [];
+        
+        for (const dt of domTasks) {
+            const dtClean = dt.command.toLowerCase().replace(/[^a-z0-9]/g, '');
+            
+            const matchedOs = osTasks.find(ot => {
+                const otClean = ot.command.toLowerCase().replace(/[^a-z0-9]/g, '');
+                const otOrigClean = ot.originalCommand.toLowerCase().replace(/[^a-z0-9]/g, '');
+                return otClean.includes(dtClean) || dtClean.includes(otClean) || otOrigClean.includes(dtClean) || dtClean.includes(otOrigClean);
+            });
+            
+            results.push({
+                taskId: dt.taskId,
+                command: dt.command,
+                pid: matchedOs ? matchedOs.pid : null,
+                name: matchedOs ? matchedOs.name : 'process'
+            });
+        }
+        return results;
+    } catch (e) {
+        console.error('[getRunningAiTasks] Error:', e.message);
+        return [];
+    }
 }
 
 const pinnedStatusFile = path.join(__dirname, '..', 'scratch', 'pinned_status.json');
@@ -373,21 +400,21 @@ async function updatePinnedDashboard() {
     const chatTitle = lastKnownChatTitle || '新会话';
     const model = lastKnownModel || '获取中...';
     
-    let text = `P: <b>${proj}</b> | C: <b>${chatTitle}</b>`;
+    let text = `📂 P: <b>${proj}</b> | 💬 C: <b>${chatTitle}</b>`;
     
-    // Fetch running terminal tasks
-    const tasks = await getRunningTerminalTasks().catch(() => []);
+    const tasks = await getRunningAiTasks().catch(() => []);
     lastActiveTerminalTasks = tasks;
     
     if (tasks.length > 0) {
         text += `\n━━━━━━━━━━━━━━━━━━━`;
-        text += `\n<b>活动后台终端任务 (${tasks.length}):</b>`;
+        text += `\n🖥️ <b>活动后台任务 (${tasks.length}):</b>`;
         tasks.forEach(t => {
             let cmdDisp = t.command;
             if (cmdDisp.length > 40) {
                 cmdDisp = cmdDisp.substring(0, 37) + '...';
             }
-            text += `\n• <code>[${t.pid}]</code> <b>${t.name.replace('.exe', '')}</b>: <code>${escapeHtml(cmdDisp)}</code>`;
+            const pidStr = t.pid ? ` [PID: ${t.pid}]` : '';
+            text += `\n• <b>${t.taskId}</b>${pidStr}: <code>${escapeHtml(cmdDisp)}</code>`;
         });
     }
                  
@@ -1349,31 +1376,42 @@ bot.command('terminal', async (ctx) => {
     const args = ctx.message.text.split(' ').slice(1).join(' ').trim();
     
     try {
-        const tasks = await getRunningTerminalTasks();
+        const tasks = await getRunningAiTasks();
         
         if (args) {
             const parts = args.split(/\s+/);
             const action = parts[0].toLowerCase();
-            const pidArg = parts[1];
+            const taskArg = parts[1];
             
-            if ((action === 'kill' || action === 'stop') && pidArg) {
-                const pid = parseInt(pidArg, 10);
-                if (isNaN(pid)) {
-                    return ctx.reply(`❌ 无效的 PID: <code>${pidArg}</code>`, { parse_mode: 'HTML', ...getStatusKeyboard(lastKnownModel) });
+            if ((action === 'kill' || action === 'stop') && taskArg) {
+                const targetTask = tasks.find(t => 
+                    t.taskId.toLowerCase() === taskArg.toLowerCase() || 
+                    (t.pid && String(t.pid) === taskArg)
+                );
+                
+                if (!targetTask) {
+                    return ctx.reply(`❌ 未找到任务或 PID 为 <code>${taskArg}</code> 的活动后台任务。`, { parse_mode: 'HTML', ...getStatusKeyboard(lastKnownModel) });
                 }
                 
-                const task = tasks.find(t => t.pid === pid);
-                if (!task) {
-                    return ctx.reply(`❌ 未找到 PID 为 <code>${pid}</code> 的活动终端任务，或该任务不是由 Antigravity 启动的（出于安全限制）。`, { parse_mode: 'HTML', ...getStatusKeyboard(lastKnownModel) });
+                if (!targetTask.pid) {
+                    ctx.reply(`⏹️ 正在尝试终止任务 <b>${targetTask.taskId}</b>...`, { parse_mode: 'HTML', ...getStatusKeyboard(lastKnownModel) });
+                    const success = await stopAgentViaCDP(CDP_PORT).catch(() => false);
+                    if (success) {
+                        ctx.reply(`✅ 已成功向 <b>${targetTask.taskId}</b> 发送停止指令。`, { parse_mode: 'HTML', ...getStatusKeyboard(lastKnownModel) });
+                    } else {
+                        ctx.reply(`❌ 终止 <b>${targetTask.taskId}</b> 失败：无法通过系统 PID 终止该任务，且无法发送停止指令。`, { parse_mode: 'HTML', ...getStatusKeyboard(lastKnownModel) });
+                    }
+                    updatePinnedDashboard().catch(() => {});
+                    return;
                 }
                 
-                ctx.reply(`⏹️ 正在终止任务 <b>${task.name}</b> (PID: <code>${pid}</code>)...`, { parse_mode: 'HTML', ...getStatusKeyboard(lastKnownModel) });
+                ctx.reply(`⏹️ 正在终止任务 <b>${targetTask.taskId}</b> (PID: <code>${targetTask.pid}</code>)...`, { parse_mode: 'HTML', ...getStatusKeyboard(lastKnownModel) });
                 
                 try {
                     const { execSync } = require('child_process');
-                    execSync(`taskkill /F /PID ${pid} /T`);
+                    execSync(`taskkill /F /PID ${targetTask.pid} /T`);
                     
-                    ctx.reply(`✅ 已成功强制终止 PID <code>${pid}</code> 及其所有子进程树！`, { parse_mode: 'HTML', ...getStatusKeyboard(lastKnownModel) });
+                    ctx.reply(`✅ 已成功强制终止 <b>${targetTask.taskId}</b> (PID: <code>${targetTask.pid}</code>) 及其所有子进程树！`, { parse_mode: 'HTML', ...getStatusKeyboard(lastKnownModel) });
                     updatePinnedDashboard().catch(() => {});
                 } catch (err) {
                     ctx.reply(`❌ 终止进程树失败: ${err.message}`, getStatusKeyboard(lastKnownModel));
@@ -1381,23 +1419,24 @@ bot.command('terminal', async (ctx) => {
                 return;
             }
             
-            return ctx.reply(`💡 <b>/terminal 使用帮助:</b>\n\n• 输入 <code>/terminal</code> 列出运行中的后台脚本\n• 输入 <code>/terminal kill &lt;PID&gt;</code> 终止指定的进程树`, { parse_mode: 'HTML', ...getStatusKeyboard(lastKnownModel) });
+            return ctx.reply(`💡 <b>/terminal 使用帮助:</b>\n\n• 输入 <code>/terminal</code> 列出运行中的后台脚本\n• 输入 <code>/terminal kill &lt;task-id&gt;</code> 终止指定的后台任务`, { parse_mode: 'HTML', ...getStatusKeyboard(lastKnownModel) });
         }
         
         if (tasks.length === 0) {
             return ctx.reply("🖥️ <b>当前没有运行中的后台终端任务。</b>", { parse_mode: 'HTML', ...getStatusKeyboard(lastKnownModel) });
         }
         
-        let msg = `🖥️ <b>活动后台终端任务列表 (${tasks.length}):</b>\n\n`;
+        let msg = `🖥️ <b>活动后台任务列表 (${tasks.length}):</b>\n\n`;
         const buttons = [];
         
         tasks.forEach((t, idx) => {
-            msg += `${idx + 1}. <code>[PID: ${t.pid}]</code> <b>${t.name.replace('.exe', '')}</b>\n`;
+            const pidStr = t.pid ? ` [PID: ${t.pid}]` : ' [PID: 未关联]';
+            msg += `${idx + 1}. <b>${t.taskId}</b>${pidStr}\n`;
             msg += `   命令: <code>${escapeHtml(t.command)}</code>\n\n`;
             
             buttons.push([{
-                text: `⏹️ 终止 PID: ${t.pid} (${t.name.replace('.exe', '')})`,
-                callback_data: `kill_task:${t.pid}`
+                text: `⏹️ 终止 ${t.taskId}`,
+                callback_data: `kill_task:${t.taskId}`
             }]);
         });
         
@@ -1447,37 +1486,49 @@ bot.action(/^approve_action:(.+)$/, async (ctx) => {
 });
 
 bot.action(/^kill_task:(.+)$/, async (ctx) => {
-    const targetPid = parseInt(ctx.match[1], 10);
+    const targetTaskId = ctx.match[1];
     try {
-        await ctx.answerCbQuery(`正在终止进程 PID: ${targetPid}...`).catch(() => {});
+        await ctx.answerCbQuery(`正在终止任务: ${targetTaskId}...`).catch(() => {});
         
-        const tasks = await getRunningTerminalTasks();
-        const task = tasks.find(t => t.pid === targetPid);
+        const tasks = await getRunningAiTasks();
+        const targetTask = tasks.find(t => t.taskId.toLowerCase() === targetTaskId.toLowerCase());
         
-        if (!task) {
-            return ctx.reply(`❌ 终止失败：未找到 PID 为 <code>${targetPid}</code> 的活动终端任务。`, { parse_mode: 'HTML', ...getStatusKeyboard(lastKnownModel) });
+        if (!targetTask) {
+            return ctx.reply(`❌ 终止失败：未找到活动任务 <code>${targetTaskId}</code>。`, { parse_mode: 'HTML', ...getStatusKeyboard(lastKnownModel) });
         }
         
         ctx.deleteMessage(ctx.callbackQuery.message.message_id).catch(() => {});
         
-        const { execSync } = require('child_process');
-        execSync(`taskkill /F /PID ${targetPid} /T`);
+        if (!targetTask.pid) {
+            ctx.reply(`⏹️ 正在尝试终止任务 <b>${targetTask.taskId}</b>...`, { parse_mode: 'HTML', ...getStatusKeyboard(lastKnownModel) });
+            const success = await stopAgentViaCDP(CDP_PORT).catch(() => false);
+            if (success) {
+                ctx.reply(`✅ 已成功向 <b>${targetTask.taskId}</b> 发送停止指令。`, { parse_mode: 'HTML', ...getStatusKeyboard(lastKnownModel) });
+            } else {
+                ctx.reply(`❌ 终止 <b>${targetTask.taskId}</b> 失败：无法定位其 PID，且无法发送停止指令。`, { parse_mode: 'HTML', ...getStatusKeyboard(lastKnownModel) });
+            }
+            updatePinnedDashboard().catch(() => {});
+            return;
+        }
         
-        ctx.reply(`✅ 已成功强制终止 PID <code>${targetPid}</code> <b>${task.name}</b> (命令: <code>${escapeHtml(task.command)}</code>) 及其所有子进程树！`, { parse_mode: 'HTML', ...getStatusKeyboard(lastKnownModel) });
+        const { execSync } = require('child_process');
+        execSync(`taskkill /F /PID ${targetTask.pid} /T`);
+        
+        ctx.reply(`✅ 已成功强制终止 <b>${targetTask.taskId}</b> (PID: <code>${targetTask.pid}</code>, 命令: <code>${escapeHtml(targetTask.command)}</code>) 及其所有子进程树！`, { parse_mode: 'HTML', ...getStatusKeyboard(lastKnownModel) });
         updatePinnedDashboard().catch(() => {});
     } catch (e) {
-        ctx.reply(`❌ 强制终止进程 PID ${targetPid} 失败: ${e.message}`, getStatusKeyboard(lastKnownModel)).catch(() => {});
+        ctx.reply(`❌ 强制终止任务 ${targetTaskId} 失败: ${e.message}`, getStatusKeyboard(lastKnownModel)).catch(() => {});
     }
 });
 
 bot.action('kill_all_tasks', async (ctx) => {
     try {
-        await ctx.answerCbQuery("正在终止所有后台进程...").catch(() => {});
+        await ctx.answerCbQuery("正在终止所有后台任务...").catch(() => {});
         
-        const tasks = await getRunningTerminalTasks();
+        const tasks = await getRunningAiTasks();
         if (tasks.length === 0) {
             ctx.deleteMessage(ctx.callbackQuery.message.message_id).catch(() => {});
-            return ctx.reply("⚠️ 未找到任何活动中的后台终端任务。", { parse_mode: 'HTML', ...getStatusKeyboard(lastKnownModel) });
+            return ctx.reply("⚠️ 未找到任何活动中的后台任务。", { parse_mode: 'HTML', ...getStatusKeyboard(lastKnownModel) });
         }
         
         ctx.deleteMessage(ctx.callbackQuery.message.message_id).catch(() => {});
@@ -1485,13 +1536,17 @@ bot.action('kill_all_tasks', async (ctx) => {
         const { execSync } = require('child_process');
         let count = 0;
         for (const task of tasks) {
-            try {
-                execSync(`taskkill /F /PID ${task.pid} /T`);
-                count++;
-            } catch (_) {}
+            if (task.pid) {
+                try {
+                    execSync(`taskkill /F /PID ${task.pid} /T`);
+                    count++;
+                } catch (_) {}
+            } else {
+                await stopAgentViaCDP(CDP_PORT).catch(() => {});
+            }
         }
         
-        ctx.reply(`✅ 已成功强制终止全部 <b>${count}</b> 个活动后台终端任务及其关联的进程树！`, { parse_mode: 'HTML', ...getStatusKeyboard(lastKnownModel) });
+        ctx.reply(`✅ 已成功发送终止指令给 <b>${tasks.length}</b> 个活动后台任务及其关联进程树！`, { parse_mode: 'HTML', ...getStatusKeyboard(lastKnownModel) });
         updatePinnedDashboard().catch(() => {});
     } catch (e) {
         ctx.reply(`❌ 一键终止后台进程失败: ${e.message}`, getStatusKeyboard(lastKnownModel)).catch(() => {});
@@ -2181,57 +2236,114 @@ bot.on('document', async (ctx) => {
 });
 
 // ===== START THE SERVICES =====
-bot.launch().catch(err => {
-    console.error("❌ Failed to launch Telegram Bot:", err.message);
-});
+const net = require('net');
+const { spawn, execSync } = require('child_process');
 
-console.log("⚡ Telegram Bot Client successfully launched!");
+async function ensureAntigravityCDP() {
+    return new Promise(async (resolve) => {
+        const port = CDP_PORT || 9223;
+        
+        // 1. Check if port is already open
+        const isOpen = await new Promise((res) => {
+            const socket = new net.Socket();
+            socket.setTimeout(800);
+            socket.once('connect', () => { socket.destroy(); res(true); });
+            socket.once('timeout', () => { socket.destroy(); res(false); });
+            socket.once('error', () => { socket.destroy(); res(false); });
+            socket.connect(port, '127.0.0.1');
+        });
+        
+        if (isOpen) {
+            console.log(`📡 Antigravity CDP debugging port ${port} is already open.`);
+            return resolve(true);
+        }
+        
+        console.log(`⚠️ Antigravity CDP debugging port ${port} is closed. Automatically launching client...`);
+        
+        // 2. Kill any running non-debug instances of Antigravity to prevent conflict
+        try {
+            execSync('taskkill /F /IM Antigravity.exe', { stdio: 'ignore' });
+        } catch (_) {}
+        
+        // 3. Launch Antigravity.exe with remote debugging enabled
+        const antiPath = "C:\\Users\\JackoMA\\AppData\\Local\\Programs\\Antigravity\\Antigravity.exe";
+        try {
+            const child = spawn(antiPath, ['--remote-debugging-port=9223'], {
+                detached: true,
+                stdio: 'ignore'
+            });
+            child.unref();
+            console.log(`🚀 Launched Antigravity client from: ${antiPath}`);
+            
+            // Wait 3.5 seconds for it to bind the port
+            await new Promise(r => setTimeout(r, 3500));
+            resolve(true);
+        } catch (err) {
+            console.error(`❌ Failed to automatically launch Antigravity client:`, err.message);
+            resolve(false);
+        }
+    });
+}
 
-// 重置并注册 Telegram 的快捷命令行菜单
-bot.telegram.setMyCommands([
-    { command: 'start', description: '📖 查看操作说明与指南' },
-    { command: 'status', description: '📊 检查电脑端连接状态' },
-    { command: 'chat', description: '💬 切换或管理活跃会话 (List & Switch Chats)' },
-    { command: 'quota', description: '💳 查询 Antigravity 额度/限额与刷新时间' },
-    { command: 'plan', description: '📋 获取当前实施方案 (Implementation Plan)' },
-    { command: 'task', description: '📝 获取当前任务清单 (Task List)' },
-    { command: 'walkthrough', description: '🏁 获取当前工作总结 (Walkthrough)' },
-    { command: 'details', description: '💭 控制是否显示中间思考过程' },
-    { command: 'terminal', description: '🖥️ 查看/终止后台运行脚本与进程' },
-    { command: 'killall', description: '⏹️ 一键强制终止所有活跃的后台终端任务' },
-    { command: 'model', description: '🤖 切换 AI 语言模型' },
-    { command: 'project', description: '📂 切换当前进行的项目' },
-    { command: 'stop', description: '⏹️ 停止电脑端 Agent 生成' },
-    { command: 'new', description: '🆕 新建空白会话 (New Chat)' },
-    { command: 'screenshot', description: '📸 截取电脑端 Antigravity 界面' },
-    { command: 'latest', description: '💬 获取最近一次 AI 完整回复' },
-    { command: 'help', description: '💡 查看快速帮助说明' }
-]).then(() => {
-    console.log("✅ Telegram menu commands successfully reset!");
-}).catch(err => {
-    console.error("❌ Failed to set Telegram commands:", err.message);
-});
+async function startApp() {
+    // 1. Ensure Antigravity is running with CDP enabled
+    await ensureAntigravityCDP();
+    
+    // 2. Launch Telegraf bot
+    bot.launch().then(() => {
+        console.log("⚡ Telegram Bot Client successfully launched!");
+    }).catch(err => {
+        console.error("❌ Failed to launch Telegram Bot:", err.message);
+    });
 
-// Resolve initial model and project asynchronously at startup
-Promise.all([
-    getCurrentModelViaCDP(CDP_PORT).catch(() => null),
-    getActiveProjectNameViaCDP(CDP_PORT).catch(() => null)
-]).then(async ([model, project]) => {
-    if (model) {
-        lastKnownModel = model;
-        console.log(`🤖 Anchored initial model: ${lastKnownModel}`);
-    }
-    if (project) {
-        lastKnownProject = project;
-        console.log(`📂 Anchored initial project: ${lastKnownProject}`);
-    }
-    // Force sync the keyboard and placeholder on startup!
-    await globalRefreshInputPlaceholder().catch(() => {});
-}).catch(err => {
-    console.error('[Startup] Failed to fetch initial state:', err.message);
-}).finally(() => {
-    startLogsWatcher();
-});
+    // 3. Reset and set commands
+    bot.telegram.setMyCommands([
+        { command: 'start', description: '📖 查看操作说明与指南' },
+        { command: 'status', description: '📊 检查电脑端连接状态' },
+        { command: 'chat', description: '💬 切换或管理活跃会话 (List & Switch Chats)' },
+        { command: 'quota', description: '💳 查询 Antigravity 额度/限额与刷新时间' },
+        { command: 'plan', description: '📋 获取当前实施方案 (Implementation Plan)' },
+        { command: 'task', description: '📝 获取当前任务清单 (Task List)' },
+        { command: 'walkthrough', description: '🏁 获取当前工作总结 (Walkthrough)' },
+        { command: 'details', description: '💭 控制是否显示中间思考过程' },
+        { command: 'terminal', description: '🖥️ 查看/终止后台运行脚本与进程' },
+        { command: 'killall', description: '⏹️ 一键强制终止所有活跃的后台终端任务' },
+        { command: 'model', description: '🤖 切换 AI 语言模型' },
+        { command: 'project', description: '📂 切换当前进行的项目' },
+        { command: 'stop', description: '⏹️ 停止电脑端 Agent 生成' },
+        { command: 'new', description: '🆕 新建空白会话 (New Chat)' },
+        { command: 'screenshot', description: '📸 截取电脑端 Antigravity 界面' },
+        { command: 'latest', description: '💬 获取最近一次 AI 完整回复' },
+        { command: 'help', description: '💡 查看快速帮助说明' }
+    ]).then(() => {
+        console.log("✅ Telegram menu commands successfully reset!");
+    }).catch(err => {
+        console.error("❌ Failed to set Telegram commands:", err.message);
+    });
+
+    // 4. Resolve initial model and project asynchronously at startup
+    Promise.all([
+        getCurrentModelViaCDP(CDP_PORT).catch(() => null),
+        getActiveProjectNameViaCDP(CDP_PORT).catch(() => null)
+    ]).then(async ([model, project]) => {
+        if (model) {
+            lastKnownModel = model;
+            console.log(`🤖 Anchored initial model: ${lastKnownModel}`);
+        }
+        if (project) {
+            lastKnownProject = project;
+            console.log(`📂 Anchored initial project: ${lastKnownProject}`);
+        }
+        // Force sync the keyboard and placeholder on startup!
+        await globalRefreshInputPlaceholder().catch(() => {});
+    }).catch(err => {
+        console.error('[Startup] Failed to fetch initial state:', err.message);
+    }).finally(() => {
+        startLogsWatcher();
+    });
+}
+
+startApp();
 
 // Graceful shutdown
 process.once('SIGINT', () => bot.stop('SIGINT'));
