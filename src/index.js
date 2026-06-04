@@ -558,6 +558,7 @@ let currentFilePath = null;
 let lastFileOffset = 0;
 const lastArtifactStats = {};
 let lastNotifiedApprovalPath = null;
+let lastActiveApproval = null;
 let consecutiveNoApprovalTicks = 0;
 let lastTypingSentTime = 0;
 let lastModelLogTime = 0;
@@ -1054,16 +1055,17 @@ function startLogsWatcher() {
             findActiveApproval(CDP_PORT).then(async (approval) => {
                 if (approval) {
                     consecutiveNoApprovalTicks = 0;
+                    lastActiveApproval = approval;
                     if (approval.path !== lastNotifiedApprovalPath) {
                         lastNotifiedApprovalPath = approval.path;
                         console.log(`⚠️ Active approval found: ${approval.actionText.substring(0, 50)}`);
                         
                         const text = `⚠️ <b>电脑端正在请求您的授权：</b>\n\n🛠️ <b>请求操作详情：</b>\n<pre>${approval.actionText}</pre>\n\n<i>👇 请点击下方按钮完成授权：</i>`;
                         
-                        const keyboardButtons = approval.buttons.map(btn => {
+                        const keyboardButtons = approval.buttons.map((btn, index) => {
                             return {
                                 text: btn.text,
-                                callback_data: `approve_action:${btn.text}`
+                                callback_data: `approve_action:idx:${index}`
                             };
                         });
                         
@@ -1843,8 +1845,29 @@ bot.action('reject_action', async (ctx) => {
     }
 });
 
-bot.action(/^approve_action:(.+)$/, async (ctx) => {
-    const buttonText = ctx.match[1];
+bot.action(/^approve_action:idx:(\d+)$/, async (ctx) => {
+    const idx = parseInt(ctx.match[1], 10);
+    let buttonText = '';
+    
+    // Attempt to retrieve button text from the cached lastActiveApproval
+    if (lastActiveApproval && lastActiveApproval.buttons && lastActiveApproval.buttons[idx]) {
+        buttonText = lastActiveApproval.buttons[idx].text;
+    }
+    
+    // Fallback: If not in cache, query CDP on the fly to get current button list
+    if (!buttonText) {
+        try {
+            const currentApproval = await findActiveApproval(CDP_PORT);
+            if (currentApproval && currentApproval.buttons && currentApproval.buttons[idx]) {
+                buttonText = currentApproval.buttons[idx].text;
+            }
+        } catch (_) {}
+    }
+    
+    if (!buttonText) {
+        return ctx.reply("❌ 无法获取对应的授权按钮文本，这可能是因为当前操作已过期或机器人服务已重启。").catch(() => {});
+    }
+    
     try {
         await ctx.answerCbQuery(`正在点击: ${buttonText}...`).catch(() => {});
         ctx.deleteMessage(ctx.callbackQuery.message.message_id).catch(() => {});

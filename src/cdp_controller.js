@@ -402,13 +402,18 @@ async function findActiveApproval(port) {
                                 const rect = b.getBoundingClientRect();
                                 
                                 // Exclude input box elements to avoid matching chat input send button
-                                if (b.closest && b.closest('.interactive-input-editor, .chat-input, #conversation textarea, .agentSidePanelInputBox, #antigravity')) {
+                                if (b.closest && b.closest('.interactive-input-editor, .chat-input, #conversation textarea, .agentSidePanelInputBox, [class*="input-container" i], .chat-input-container')) {
+                                    return false;
+                                }
+                                
+                                // Exclude running task/terminal buttons to avoid task status/log notification noise
+                                if (b.closest && b.closest('.xterm, .terminal, [class*="terminal" i], [class*="task-list" i], [class*="task-item" i], [class*="background-task" i], [class*="task-manager" i]')) {
                                     return false;
                                 }
                                 
                                 const approvalKeywords = [
-                                    'approve', 'reject', 'allow', 'deny', 'yes, allow', 'always allow', 'skip', 'skip step', 'submit', 'confirm', 'run', 'accept', 'yes', 'no', 'cancel',
-                                    '同意', '拒绝', '允许', '跳过', '取消', '确定', '确认', '提交', '执行', '运行', '是', '否', 'allow this time', 'yes, allow this time'
+                                    'approve', 'allow', 'yes, allow', 'always allow', 'skip', 'skip step', 'submit', 'confirm', 'run', 'accept', 'yes',
+                                    '同意', '允许', '跳过', '确定', '确认', '提交', '执行', '运行', '是', 'allow this time', 'yes, allow this time'
                                 ];
                                 
                                 const isApproval = approvalKeywords.some(k => text === k || text.includes(k) || ariaLabel === k || ariaLabel.includes(k));
@@ -534,12 +539,21 @@ async function respondToApproval(port, action) {
                             
                             const anchorKeywords = [
                                 'submit', 'skip', '提交', '跳过', 'confirm', '确定', '确认',
-                                'yes, allow', 'yes', 'run', 'accept', 'approve', 'allow', '允许', '同意', 'cancel', '取消', 'reject', '拒绝', 'deny', 'no', '否'
+                                'yes, allow', 'yes', 'run', 'accept', 'approve', 'allow', '允许', '同意'
                             ];
                             const anchorBtn = allButtons.slice().reverse().find(b => {
                                 const text = (b.textContent || '').replace(/[\\n\\r\\t]/g, '').trim().toLowerCase();
                                 const ariaLabel = (b.getAttribute('aria-label') || '').trim().toLowerCase();
                                 const rect = b.getBoundingClientRect();
+                                
+                                // Exclude input box and terminal/task buttons to match findActiveApproval
+                                if (b.closest && b.closest('.interactive-input-editor, .chat-input, #conversation textarea, .agentSidePanelInputBox, [class*="input-container" i], .chat-input-container')) {
+                                    return false;
+                                }
+                                if (b.closest && b.closest('.xterm, .terminal, [class*="terminal" i], [class*="task-list" i], [class*="task-item" i], [class*="background-task" i], [class*="task-manager" i]')) {
+                                    return false;
+                                }
+                                
                                 const isMatch = anchorKeywords.some(k =>
                                     text === k || text.includes(k) ||
                                     ariaLabel === k || ariaLabel.includes(k)
