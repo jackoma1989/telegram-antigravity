@@ -33,7 +33,10 @@ const {
     sendImageViaCDP,
     getActiveConversationIdViaCDP,
     waitForTargetReady,
-    getRunningTasksViaCDP
+    getRunningTasksViaCDP,
+    resolveTargets,
+    setPreferredTargetId,
+    registerProjectViaCDP
 } = require('./cdp_controller');
 const { launchIDE, config } = require('./platform');
 
@@ -59,6 +62,155 @@ bot.use((ctx, next) => {
     }
     return next();
 });
+
+// Global Cleanup & Auto-Delete Middleware
+bot.use(async (ctx, next) => {
+    // 0. (Removed deleteLastTempMsg here so keyboard remains persistent during typing and thinking)
+
+    // 1. Auto-delete user's own command, status button click and prefix-only messages immediately
+    if (ctx.message && ctx.message.text) {
+        const text = ctx.message.text.trim();
+        const isCommand = text.startsWith('/');
+        const isStatusBtn = text.startsWith('📁') || text.startsWith('💬') || text.startsWith('🤖') || text === '🛠️ 菜单 & Quota' || (text.includes('📁 P:') && text.includes('💬 C:'));
+        const prefixOnlyRegex = /^(?:(?:\[([^\]]+)\]|@([a-zA-Z0-9_\u4e00-\u9fa5-]+))\s*)+$/i;
+        const isPrefixOnly = prefixOnlyRegex.test(text);
+        
+        if (isCommand || isStatusBtn || isPrefixOnly) {
+            ctx.deleteMessage(ctx.message.message_id).catch(() => {});
+        }
+    }
+
+    // 2. Wrap outgoing bot reply methods to auto-delete command responses
+    const originalReply = ctx.reply;
+    ctx.reply = async function(text, extra) {
+        let modifiedExtra = { ...extra };
+        let hasReplyKeyboard = false;
+        
+        if (modifiedExtra && modifiedExtra.reply_markup && modifiedExtra.reply_markup.keyboard) {
+            hasReplyKeyboard = true;
+            delete modifiedExtra.reply_markup;
+        }
+        
+        const msg = await originalReply.call(this, text, modifiedExtra);
+        if (msg && msg.message_id) {
+            const textMsg = ctx.message && ctx.message.text ? ctx.message.text.trim() : '';
+            const isCommand = textMsg.startsWith('/');
+            const isStatusBtn = textMsg.startsWith('📁') || textMsg.startsWith('💬') || textMsg.startsWith('🤖') || textMsg === '🛠️ 菜单 & Quota' || (textMsg.includes('📁 P:') && textMsg.includes('💬 C:'));
+            const prefixOnlyRegex = /^(?:(?:\[([^\]]+)\]|@([a-zA-Z0-9_\u4e00-\u9fa5-]+))\s*)+$/i;
+            const isPrefixOnly = prefixOnlyRegex.test(textMsg);
+            const isCallback = !!ctx.callbackQuery;
+            
+            if (isCommand || isStatusBtn || isPrefixOnly || isCallback) {
+                if (hasReplyKeyboard) {
+                    await sendOrUpdateKeyboard(ctx.chat.id).catch(() => {});
+                    scheduleDeletion(ctx.chat.id, msg.message_id, 15000, true);
+                } else {
+                    // Standard temporary message (like menus or other non-keyboard messages)
+                    const hasInlineKeyboard = modifiedExtra && modifiedExtra.reply_markup && modifiedExtra.reply_markup.inline_keyboard;
+                    const delay = hasInlineKeyboard ? 15000 : 8000;
+                    scheduleDeletion(ctx.chat.id, msg.message_id, delay, true);
+                }
+            }
+        }
+        return msg;
+    };
+
+    const originalReplyWithPhoto = ctx.replyWithPhoto;
+    ctx.replyWithPhoto = async function(photo, extra) {
+        let modifiedExtra = { ...extra };
+        let hasReplyKeyboard = false;
+        if (modifiedExtra && modifiedExtra.reply_markup && modifiedExtra.reply_markup.keyboard) {
+            hasReplyKeyboard = true;
+            delete modifiedExtra.reply_markup;
+        }
+        
+        const msg = await originalReplyWithPhoto.call(this, photo, modifiedExtra);
+        if (msg && msg.message_id) {
+            if (hasReplyKeyboard) {
+                await sendOrUpdateKeyboard(ctx.chat.id).catch(() => {});
+            }
+            scheduleDeletion(ctx.chat.id, msg.message_id, 15000, true);
+        }
+        return msg;
+    };
+
+    const originalReplyWithDocument = ctx.replyWithDocument;
+    ctx.replyWithDocument = async function(doc, extra) {
+        let modifiedExtra = { ...extra };
+        let hasReplyKeyboard = false;
+        if (modifiedExtra && modifiedExtra.reply_markup && modifiedExtra.reply_markup.keyboard) {
+            hasReplyKeyboard = true;
+            delete modifiedExtra.reply_markup;
+        }
+        
+        const msg = await originalReplyWithDocument.call(this, doc, modifiedExtra);
+        if (msg && msg.message_id) {
+            if (hasReplyKeyboard) {
+                await sendOrUpdateKeyboard(ctx.chat.id).catch(() => {});
+            }
+            scheduleDeletion(ctx.chat.id, msg.message_id, 20000, true);
+        }
+        return msg;
+    };
+
+    return next();
+});
+
+async function showProjectsMenu(ctx) {
+    try {
+        const projects = await getAvailableProjectsViaCDP(CDP_PORT);
+        const buttons = [];
+        projects.forEach((proj, idx) => {
+            const btn = { text: `📁 ${proj.name}`, callback_data: `proj:${proj.uri}` };
+            if (idx % 2 === 0) {
+                buttons.push([btn]);
+            } else {
+                buttons[buttons.length - 1].push(btn);
+            }
+        });
+        
+        // Add Create New Project button at the bottom
+        buttons.push([{ text: '🆕 开启新项目', callback_data: 'proj:create_new_project' }]);
+        
+        let projMsg = `📂 <b>切换当前进行的项目：</b>\n\n请在下方点击选择切换项目，或开启一个全新项目：`;
+        if (projects.length === 0) {
+            projMsg = `📂 <b>项目管理：</b>\n\n⚠️ 未在电脑端 Antigravity 中找到任何活跃项目。您可以点击下方按钮开启新项目：`;
+        }
+        
+        return await ctx.reply(projMsg, {
+            parse_mode: 'HTML',
+            reply_markup: {
+                inline_keyboard: buttons
+            }
+        });
+    } catch (e) {
+        return ctx.reply(`❌ 获取项目列表失败: ${e.message}`, getStatusKeyboard(lastKnownModel));
+    }
+}
+
+async function showModelsMenu(ctx) {
+    const modelMsg = `🤖 <b>切换 AI 语言模型：</b>\n\n请在下方选择您想要切换的目标模型：`;
+    return await ctx.reply(modelMsg, { parse_mode: 'HTML', ...modelKeyboard });
+}
+
+async function showControlMenu(ctx) {
+    const menuText = `🛠️ <b>控制台管理菜单</b>\n\n请选择您要执行的操作：`;
+    const inlineKeyboard = {
+        reply_markup: {
+            inline_keyboard: [
+                [
+                    { text: '📁 切换项目 (Project)', callback_data: 'session:show_projects' },
+                    { text: '💬 切换会话 (Chats)', callback_data: 'session:show_chats' }
+                ],
+                [
+                    { text: '🤖 切换 AI 模型 (Model)', callback_data: 'session:show_models' },
+                    { text: '💳 查询 Quota (Quota)', callback_data: 'session:show_quota' }
+                ]
+            ]
+        }
+    };
+    return await ctx.reply(menuText, { parse_mode: 'HTML', ...inlineKeyboard });
+}
 
 // ===== MARKDOWN TO TELEGRAM HTML CONVERTER =====
 function markdownToTelegramHtml(text) {
@@ -168,17 +320,169 @@ function getModelShortName(modelName) {
     return short.toLowerCase().replace(/\s+/g, ' ');
 }
 
+const activeApprovalsFile = path.join(__dirname, '..', 'scratch', 'active_approvals.json');
+const keyboardStateFile = path.join(__dirname, '..', 'scratch', 'keyboard_state.json');
+
+function getActiveApprovalMessages() {
+    try {
+        if (fs.existsSync(activeApprovalsFile)) {
+            return JSON.parse(fs.readFileSync(activeApprovalsFile, 'utf8')) || {};
+        }
+    } catch (_) {}
+    return {};
+}
+
+function saveActiveApprovalMessages(data) {
+    try {
+        const scratchDir = path.dirname(activeApprovalsFile);
+        if (!fs.existsSync(scratchDir)) {
+            fs.mkdirSync(scratchDir, { recursive: true });
+        }
+        fs.writeFileSync(activeApprovalsFile, JSON.stringify(data, null, 2), 'utf8');
+    } catch (_) {}
+}
+
+function getPersistedKeyboardState() {
+    try {
+        if (fs.existsSync(keyboardStateFile)) {
+            return JSON.parse(fs.readFileSync(keyboardStateFile, 'utf8')) || {};
+        }
+    } catch (_) {}
+    return {};
+}
+
+function savePersistedKeyboardState(state) {
+    try {
+        const scratchDir = path.dirname(keyboardStateFile);
+        if (!fs.existsSync(scratchDir)) {
+            fs.mkdirSync(scratchDir, { recursive: true });
+        }
+        fs.writeFileSync(keyboardStateFile, JSON.stringify(state, null, 2), 'utf8');
+    } catch (_) {}
+}
+
+let lastTempMsgId = null;
+
+async function deleteLastTempMsg(chatId) {
+    // Kept for backward compatibility
+    await deleteLastKeyboardMsg(chatId);
+}
+
+async function deleteLastKeyboardMsg(chatId) {
+    const state = getPersistedKeyboardState();
+    const chatState = state[chatId];
+    if (chatState && !chatState.isPermanent) {
+        try {
+            await bot.telegram.deleteMessage(chatId, chatState.messageId);
+        } catch (_) {}
+        delete state[chatId];
+        savePersistedKeyboardState(state);
+    }
+}
+
+const lastSentKeyboardState = {}; // chatId -> stateStr
+const keyboardUpdateChains = {}; // chatId -> Promise
+
+async function sendOrUpdateKeyboard(chatId) {
+    if (!keyboardUpdateChains[chatId]) {
+        keyboardUpdateChains[chatId] = Promise.resolve();
+    }
+    
+    // Chain the execution sequentially to prevent concurrent execution race condition
+    keyboardUpdateChains[chatId] = keyboardUpdateChains[chatId].then(async () => {
+        await _sendOrUpdateKeyboardInternal(chatId);
+    }).catch(() => {});
+    
+    return keyboardUpdateChains[chatId];
+}
+
+async function _sendOrUpdateKeyboardInternal(chatId) {
+    const proj = lastKnownProject || '无项目';
+    const chatTitle = lastKnownChatTitle || '新会话';
+    const model = lastKnownModel || '';
+    const taskCount = lastActiveTerminalTasks ? lastActiveTerminalTasks.length : 0;
+    const stateStr = `${proj}:${chatTitle}:${model}:${taskCount}`;
+    
+    const state = getPersistedKeyboardState();
+    const chatState = state[chatId];
+    
+    // If the state hasn't changed and we already have a valid keyboard message, do nothing!
+    if (lastSentKeyboardState[chatId] === stateStr && chatState && chatState.messageId) {
+        return;
+    }
+    
+    const markup = getStatusKeyboard(lastKnownModel);
+    
+    try {
+        const msg = await bot.telegram.sendMessage(chatId, '●', {
+            parse_mode: 'HTML',
+            ...markup
+        });
+        
+        // Delete the previous temporary keyboard message after successfully sending the new one
+        await deleteLastKeyboardMsg(chatId);
+        
+        // Save state
+        const newState = getPersistedKeyboardState();
+        newState[chatId] = {
+            messageId: msg.message_id,
+            isPermanent: false
+        };
+        savePersistedKeyboardState(newState);
+        
+        lastTempMsgId = msg.message_id; // For backward compatibility
+        lastSentKeyboardState[chatId] = stateStr;
+    } catch (e) {
+        console.error('[sendOrUpdateKeyboard] Error:', e.message);
+    }
+}
+
+function scheduleDeletion(chatId, messageId, delayMs = 15000, force = false) {
+    setTimeout(async () => {
+        try {
+            const state = getPersistedKeyboardState();
+            const chatState = state[chatId];
+            const isKeyboardMsg = chatState && chatState.messageId === messageId;
+            
+            if (force || !isKeyboardMsg) {
+                await bot.telegram.deleteMessage(chatId, messageId);
+                if (isKeyboardMsg) {
+                    delete state[chatId];
+                    savePersistedKeyboardState(state);
+                }
+            }
+        } catch (_) {}
+    }, delayMs);
+}
+
 function getStatusKeyboard(modelName) {
+    const proj = lastKnownProject || '无项目';
+    const chatTitle = lastKnownChatTitle || '新会话';
+    const model = modelName || lastKnownModel || '';
+    const taskCount = lastActiveTerminalTasks ? lastActiveTerminalTasks.length : 0;
+    
+    // Clean strings and limit lengths for Telegram button layout
+    const limitLen = (str, max = 15) => {
+        if (!str) return '';
+        // strip emojis from button texts to keep it super clean
+        let clean = str.replace(/[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD10-\uDDFF]/g, '').trim();
+        return clean.length > max ? clean.substring(0, max - 2) + '..' : clean;
+    };
+    
+    // Single status button containing active project and session name
+    const statusBtnText = `📁 P: ${limitLen(proj, 10)} | 💬 C: ${limitLen(chatTitle, 10)}`;
+    const taskPart = taskCount > 0 ? ` | 🖥️ Tasks: ${taskCount}` : '';
+    
     return {
         reply_markup: {
             keyboard: [
                 [
-                    { text: 'Switch & Quota' }
+                    { text: statusBtnText }
                 ]
             ],
             resize_keyboard: true,
             is_persistent: true,
-            input_field_placeholder: `模型: ${getModelShortName(modelName)}`
+            input_field_placeholder: `模型: ${getModelShortName(model)}${taskPart}`
         }
     };
 }
@@ -395,70 +699,35 @@ function savePinnedMessageId(chatId, msgId) {
     } catch (e) {}
 }
 
+let lastKeyboardStateStr = {};
+
 async function updatePinnedDashboard() {
-    const proj = lastKnownProject || '获取中...';
+    const proj = lastKnownProject || '无项目';
     const chatTitle = lastKnownChatTitle || '新会话';
-    const model = lastKnownModel || '获取中...';
+    const model = lastKnownModel || '';
     
-    let text = `📂 P: <b>${proj}</b> | 💬 C: <b>${chatTitle}</b>`;
-    
+    // Fetch running terminal tasks
     const tasks = await getRunningAiTasks().catch(() => []);
     lastActiveTerminalTasks = tasks;
+    const taskCount = tasks.length;
     
-    if (tasks.length > 0) {
-        text += `\n━━━━━━━━━━━━━━━━━━━`;
-        text += `\n🖥️ <b>活动后台任务 (${tasks.length}):</b>`;
-        tasks.forEach(t => {
-            let cmdDisp = t.command;
-            if (cmdDisp.length > 40) {
-                cmdDisp = cmdDisp.substring(0, 37) + '...';
-            }
-            const pidStr = t.pid ? ` [PID: ${t.pid}]` : '';
-            text += `\n• <b>${t.taskId}</b>${pidStr}: <code>${escapeHtml(cmdDisp)}</code>`;
-        });
-    }
-                 
+    const stateStr = `${proj}:${chatTitle}:${model}:${taskCount}`;
+    
     for (const chatId of ALLOWED_CHAT_IDS) {
-        if (text === lastDashboardTextMap[chatId]) {
-            continue; // Avoid double sends
-        }
-        
-        lastDashboardTextMap[chatId] = text;
-        
-        let msgId = getPinnedMessageId(chatId);
-        let editSuccess = false;
-        
+        // Clean up and unpin any legacy dashboard messages to keep the top bar clean
+        const msgId = getPinnedMessageId(chatId);
         if (msgId) {
             try {
-                // Edit dashboard in place cleanly without reply_markup to prevent 400 Bad Request
-                await bot.telegram.editMessageText(chatId, msgId, null, text, { parse_mode: 'HTML' });
-                editSuccess = true;
-            } catch (err) {
-                console.log(`[Dashboard] Edit failed for chat ${chatId}, recreating:`, err.message);
-            }
+                await bot.telegram.unpinChatMessage(chatId, msgId).catch(() => {});
+                await bot.telegram.deleteMessage(chatId, msgId).catch(() => {});
+            } catch (_) {}
+            savePinnedMessageId(chatId, null);
         }
         
-        if (!editSuccess) {
-            try {
-                if (msgId) {
-                    try {
-                        await bot.telegram.deleteMessage(chatId, msgId);
-                    } catch (delErr) {
-                        console.log('[Dashboard] Delete old message failed:', delErr.message);
-                    }
-                }
-                
-                const newMsg = await bot.telegram.sendMessage(chatId, text, { parse_mode: 'HTML' });
-                savePinnedMessageId(chatId, newMsg.message_id);
-                try {
-                    await bot.telegram.pinChatMessage(chatId, newMsg.message_id, { disable_notification: true });
-                } catch (pinErr) {
-                    console.error('[Dashboard] Pin message failed:', pinErr.message);
-                }
-            } catch (err) {
-                console.error('[Dashboard] Send fresh dashboard failed:', err.message);
-            }
-        }
+        lastKeyboardStateStr[chatId] = stateStr;
+        
+        // Sync custom reply keyboard
+        await sendOrUpdateKeyboard(chatId).catch(() => {});
     }
 }
 
@@ -490,16 +759,65 @@ function getLatestActiveSession() {
     }
 }
 
-// Push direct notifications to the ALLOWED_CHAT_IDS
-// Push direct notifications to the ALLOWED_CHAT_IDS
-function pushToUser(text, header = '', extraOptions = {}) {
-    ALLOWED_CHAT_IDS.forEach(chatId => {
-        const dummyCtx = { reply: (content, opts) => bot.telegram.sendMessage(chatId, content, opts) };
-        const mergedOptions = { ...getStatusKeyboard(lastKnownModel), ...extraOptions };
-        sendLongMessage(dummyCtx, text, header, mergedOptions).catch(err => {
+async function pushToUser(text, header = '', extraOptions = {}, autoDeleteDelay = 0) {
+    const promises = ALLOWED_CHAT_IDS.map(async (chatId) => {
+        const dummyCtx = { 
+            reply: async (content, opts) => {
+                const msg = await bot.telegram.sendMessage(chatId, content, opts);
+                if (msg && msg.message_id) {
+                    const hasReplyKeyboard = opts && opts.reply_markup && opts.reply_markup.keyboard;
+                    if (hasReplyKeyboard) {
+                        // Delete the previous temporary keyboard message
+                        await deleteLastKeyboardMsg(chatId);
+                        
+                        if (autoDeleteDelay > 0) {
+                            const state = getPersistedKeyboardState();
+                            state[chatId] = {
+                                messageId: msg.message_id,
+                                isPermanent: false
+                            };
+                            savePersistedKeyboardState(state);
+                            lastTempMsgId = msg.message_id;
+                            scheduleDeletion(chatId, msg.message_id, autoDeleteDelay, true);
+                        } else {
+                            // Permanent keyboard message (like AI reply)
+                            const state = getPersistedKeyboardState();
+                            state[chatId] = {
+                                messageId: msg.message_id,
+                                isPermanent: true
+                            };
+                            savePersistedKeyboardState(state);
+                            lastTempMsgId = null;
+                            
+                            const proj = lastKnownProject || '无项目';
+                            const chatTitle = lastKnownChatTitle || '新会话';
+                            const model = lastKnownModel || '';
+                            const taskCount = lastActiveTerminalTasks ? lastActiveTerminalTasks.length : 0;
+                            lastSentKeyboardState[chatId] = `${proj}:${chatTitle}:${model}:${taskCount}`;
+                        }
+                    } else if (autoDeleteDelay > 0) {
+                        // Standard temporary message without keyboard, safe to delete on a timer.
+                        scheduleDeletion(chatId, msg.message_id, autoDeleteDelay, true);
+                    }
+                }
+                return msg;
+            } 
+        };
+        
+        let mergedOptions = { ...extraOptions };
+        const isTemporary = autoDeleteDelay > 0;
+        if (!isTemporary) {
+            // Only permanent messages carry the keyboard
+            mergedOptions = { ...getStatusKeyboard(lastKnownModel), ...mergedOptions };
+        }
+        
+        try {
+            await sendLongMessage(dummyCtx, text, header, mergedOptions);
+        } catch (err) {
             console.error('[pushToUser] Failed to send push message:', err.message);
-        });
+        }
     });
+    await Promise.all(promises);
 }
 
 // Active polling check for logs filesystem updates
@@ -602,7 +920,7 @@ function startLogsWatcher() {
                 const ageMs = Date.now() - stat.birthtimeMs;
                 lastFileOffset = (ageMs < 60000) ? 0 : stat.size;
                 
-                lastKnownChatTitle = null; // Reset chat title so it gets queried on the next tick
+                lastKnownChatTitle = '切换中...'; // Reset chat title to trigger notification on next tick
                 
                 // Anchor artifact stats for the new session so we don't send old historical files immediately
                 const newSessionDir = path.join(brainPath, currentSessionId);
@@ -649,7 +967,7 @@ function startLogsWatcher() {
 
                                 if (showDetails && hasThinking) {
                                     console.log(`✨ Captured intermediate thinking in session ${currentSessionId.substring(0, 8)}`);
-                                    pushToUser(entry.thinking, `💭 <b>Antigravity 思考过程：</b>`);
+                                    pushToUser(entry.thinking, `💭 <b>Antigravity 思考过程：</b>`, { reply_markup: null }, 15000);
                                 }
 
                                 if (hasContent) {
@@ -705,7 +1023,7 @@ function startLogsWatcher() {
                         const content = fs.readFileSync(filePath, 'utf8');
                         const preview = content.substring(0, 800) + (content.length > 800 ? '\n\n...' : '');
                         
-                        pushToUser(preview, `${title}\n\n<i>👇 完整 markdown 文件已发送在下方：</i>`);
+                        pushToUser(preview, `${title}\n\n<i>👇 完整 markdown 文件已发送在下方：</i>`, { reply_markup: null }, 15000);
                         
                         try {
                             const fileContent = fs.readFileSync(filePath);
@@ -733,7 +1051,7 @@ function startLogsWatcher() {
 
         // 4. Scan for active approvals
         try {
-            findActiveApproval(CDP_PORT).then(approval => {
+            findActiveApproval(CDP_PORT).then(async (approval) => {
                 if (approval) {
                     consecutiveNoApprovalTicks = 0;
                     if (approval.path !== lastNotifiedApprovalPath) {
@@ -749,7 +1067,6 @@ function startLogsWatcher() {
                             };
                         });
                         
-                        // Group buttons into rows (max 2 buttons per row)
                         const rows = [];
                         for (let i = 0; i < keyboardButtons.length; i += 2) {
                             rows.push(keyboardButtons.slice(i, i + 2));
@@ -761,14 +1078,49 @@ function startLogsWatcher() {
                             }
                         };
                         
-                        ALLOWED_CHAT_IDS.forEach(chatId => {
-                            bot.telegram.sendMessage(chatId, text, { parse_mode: 'HTML', ...inlineKeyboard }).catch(() => {});
+                        // Clean up any existing approval messages before sending new one
+                        const activeApprovalMessages = getActiveApprovalMessages();
+                        ALLOWED_CHAT_IDS.forEach(async (chatId) => {
+                            const oldMsgId = activeApprovalMessages[chatId];
+                            if (oldMsgId) {
+                                try {
+                                    await bot.telegram.deleteMessage(chatId, oldMsgId);
+                                } catch (_) {}
+                                delete activeApprovalMessages[chatId];
+                            }
+                            
+                            try {
+                                const msg = await bot.telegram.sendMessage(chatId, text, { parse_mode: 'HTML', ...inlineKeyboard });
+                                if (msg && msg.message_id) {
+                                    activeApprovalMessages[chatId] = msg.message_id;
+                                    saveActiveApprovalMessages(activeApprovalMessages);
+                                }
+                            } catch (err) {
+                                console.error('[LogsWatcher] Failed to send approval msg:', err.message);
+                            }
                         });
                     }
                 } else {
                     consecutiveNoApprovalTicks++;
                     if (consecutiveNoApprovalTicks >= 3) {
                         lastNotifiedApprovalPath = null;
+                        
+                        // Clean up the Telegram messages since approval is gone
+                        const activeApprovalMessages = getActiveApprovalMessages();
+                        let changed = false;
+                        for (const chatId of ALLOWED_CHAT_IDS) {
+                            const msgId = activeApprovalMessages[chatId];
+                            if (msgId) {
+                                try {
+                                    await bot.telegram.deleteMessage(chatId, msgId);
+                                } catch (_) {}
+                                delete activeApprovalMessages[chatId];
+                                changed = true;
+                            }
+                        }
+                        if (changed) {
+                            saveActiveApprovalMessages(activeApprovalMessages);
+                        }
                     }
                 }
             }).catch(() => {});
@@ -798,13 +1150,13 @@ function startLogsWatcher() {
                 const oldModel = lastKnownModel;
                 lastKnownModel = modelName;
                 if (oldModel !== null) {
-                    pushToUser(`🤖 模型已自动同步为: <code>${getModelShortName(modelName)}</code>`);
+                    await pushToUser(`🤖 模型已自动同步为: <code>${getModelShortName(modelName)}</code>`, '', {}, 5000);
                     await globalRefreshInputPlaceholder();
-                    updatePinnedDashboard().catch(() => {}); // Sync dashboard on model switch
+                    await updatePinnedDashboard().catch(() => {}); // Sync dashboard on model switch
                 } else {
                     console.log(`🤖 Initial active model detected: ${modelName}`);
                     await globalRefreshInputPlaceholder();
-                    updatePinnedDashboard().catch(() => {});
+                    await updatePinnedDashboard().catch(() => {});
                 }
             }
         } catch (e) {
@@ -818,11 +1170,11 @@ function startLogsWatcher() {
                 const oldProj = lastKnownProject;
                 lastKnownProject = projName;
                 if (oldProj !== null) {
-                    pushToUser(`📁 项目已自动同步为: <code>${projName}</code>`);
-                    updatePinnedDashboard().catch(() => {}); // Sync dashboard on project switch
+                    await pushToUser(`📁 项目已自动同步为: <code>${projName}</code>`, '', {}, 5000);
+                    await updatePinnedDashboard().catch(() => {}); // Sync dashboard on project switch
                 } else {
                     console.log(`📂 Initial active project detected: ${projName}`);
-                    updatePinnedDashboard().catch(() => {});
+                    await updatePinnedDashboard().catch(() => {});
                 }
             }
         } catch (e) {
@@ -836,11 +1188,11 @@ function startLogsWatcher() {
                 const oldChat = lastKnownChatTitle;
                 lastKnownChatTitle = chatTitle;
                 if (oldChat !== null) {
-                    pushToUser(`💬 会话已自动同步为: <code>${chatTitle}</code>`);
-                    updatePinnedDashboard().catch(() => {}); // Sync dashboard on chat title switch
+                    await pushToUser(`💬 会话已自动同步为: <code>${chatTitle}</code>`, '', {}, 5000);
+                    await updatePinnedDashboard().catch(() => {}); // Sync dashboard on chat title switch
                 } else {
                     console.log(`💬 Initial active chat title detected: ${chatTitle}`);
-                    updatePinnedDashboard().catch(() => {});
+                    await updatePinnedDashboard().catch(() => {});
                 }
             }
         } catch (e) {
@@ -1330,12 +1682,6 @@ bot.command('project', async (ctx) => {
             await ctx.reply(`⚠️ 未找到名字包含 "${args}" 的活跃项目。下面是所有可用项目：`, getStatusKeyboard(lastKnownModel));
         }
 
-        if (projects.length === 0) {
-            return ctx.reply("⚠️ 未在电脑端 Antigravity 中找到任何活跃项目。");
-        }
-        
-        let projMsg = `📂 <b>切换当前进行的项目：</b>\n\n当前检测到 <b>${projects.length}</b> 个可用项目，请点击选择切换：\n\n`;
-        
         const buttons = [];
         projects.forEach((proj, idx) => {
             const btn = { text: `📁 ${proj.name}`, callback_data: `proj:${proj.uri}` };
@@ -1345,6 +1691,13 @@ bot.command('project', async (ctx) => {
                 buttons[buttons.length - 1].push(btn);
             }
         });
+        
+        buttons.push([{ text: '🆕 开启新项目', callback_data: 'proj:create_new_project' }]);
+        
+        let projMsg = `📂 <b>切换当前进行的项目：</b>\n\n当前检测到 <b>${projects.length}</b> 个可用项目，请点击选择切换，或开启新项目：`;
+        if (projects.length === 0) {
+            projMsg = `📂 <b>项目管理：</b>\n\n⚠️ 未在电脑端 Antigravity 中找到任何活跃项目。您可以点击下方按钮开启新项目：`;
+        }
         
         ctx.reply(projMsg, {
             parse_mode: 'HTML',
@@ -1458,6 +1811,14 @@ bot.action('approve_action', async (ctx) => {
     try {
         await ctx.answerCbQuery("正在同意并执行...").catch(() => {});
         ctx.deleteMessage(ctx.callbackQuery.message.message_id).catch(() => {});
+        
+        const activeApprovalMessages = getActiveApprovalMessages();
+        const chatId = ctx.chat.id.toString();
+        if (activeApprovalMessages[chatId]) {
+            delete activeApprovalMessages[chatId];
+            saveActiveApprovalMessages(activeApprovalMessages);
+        }
+        
         await respondToApproval(CDP_PORT, 'approve');
     } catch (e) {
         await ctx.reply(`❌ 执行出错: ${e.message}`).catch(() => {});
@@ -1468,6 +1829,14 @@ bot.action('reject_action', async (ctx) => {
     try {
         await ctx.answerCbQuery("正在拒绝...").catch(() => {});
         ctx.deleteMessage(ctx.callbackQuery.message.message_id).catch(() => {});
+        
+        const activeApprovalMessages = getActiveApprovalMessages();
+        const chatId = ctx.chat.id.toString();
+        if (activeApprovalMessages[chatId]) {
+            delete activeApprovalMessages[chatId];
+            saveActiveApprovalMessages(activeApprovalMessages);
+        }
+        
         await respondToApproval(CDP_PORT, 'reject');
     } catch (e) {
         await ctx.reply(`❌ 执行出错: ${e.message}`).catch(() => {});
@@ -1479,6 +1848,14 @@ bot.action(/^approve_action:(.+)$/, async (ctx) => {
     try {
         await ctx.answerCbQuery(`正在点击: ${buttonText}...`).catch(() => {});
         ctx.deleteMessage(ctx.callbackQuery.message.message_id).catch(() => {});
+        
+        const activeApprovalMessages = getActiveApprovalMessages();
+        const chatId = ctx.chat.id.toString();
+        if (activeApprovalMessages[chatId]) {
+            delete activeApprovalMessages[chatId];
+            saveActiveApprovalMessages(activeApprovalMessages);
+        }
+        
         await respondToApproval(CDP_PORT, buttonText);
     } catch (e) {
         await ctx.reply(`❌ 执行出错: ${e.message}`).catch(() => {});
@@ -1557,30 +1934,9 @@ bot.action('session:show_projects', async (ctx) => {
     try {
         await ctx.answerCbQuery().catch(() => {});
         ctx.deleteMessage(ctx.callbackQuery.message.message_id).catch(() => {});
-        
-        const projects = await getAvailableProjectsViaCDP(CDP_PORT);
-        if (projects.length === 0) {
-            return ctx.reply("⚠️ 未在电脑端 Antigravity 中找到任何活跃项目。", getStatusKeyboard(lastKnownModel));
-        }
-        
-        let projMsg = `📂 <b>切换当前进行的项目：</b>\n\n请在下方点击选择切换项目：`;
-        const buttons = [];
-        projects.forEach((proj, idx) => {
-            const btn = { text: `📁 ${proj.name}`, callback_data: `proj:${proj.uri}` };
-            if (idx % 2 === 0) {
-                buttons.push([btn]);
-            } else {
-                buttons[buttons.length - 1].push(btn);
-            }
-        });
-        ctx.reply(projMsg, {
-            parse_mode: 'HTML',
-            reply_markup: {
-                inline_keyboard: buttons
-            }
-        });
+        await showProjectsMenu(ctx);
     } catch (e) {
-        ctx.reply(`❌ 获取项目列表失败: ${e.message}`, getStatusKeyboard(lastKnownModel));
+        ctx.reply(`❌ 切换项目菜单失败: ${e.message}`).catch(() => {});
     }
 });
 
@@ -1588,9 +1944,7 @@ bot.action('session:show_models', async (ctx) => {
     try {
         await ctx.answerCbQuery().catch(() => {});
         ctx.deleteMessage(ctx.callbackQuery.message.message_id).catch(() => {});
-        
-        const modelMsg = `🤖 <b>切换 AI 语言模型：</b>\n\n请在下方选择您想要切换的目标模型：`;
-        ctx.reply(modelMsg, { parse_mode: 'HTML', ...modelKeyboard });
+        await showModelsMenu(ctx);
     } catch (e) {
         ctx.reply(`❌ 切换模型菜单失败: ${e.message}`).catch(() => {});
     }
@@ -1609,9 +1963,16 @@ bot.action('session:show_quota', async (ctx) => {
 // Helper to render conversation list menu dynamically
 async function showConversationsMenu(ctx) {
     try {
-        const conversations = await getConversationsViaCDP(CDP_PORT);
+        const conversations = await getConversationsViaCDP(CDP_PORT).catch(() => []);
         if (conversations.length === 0) {
-            return ctx.reply("⚠️ 未在电脑端 Antigravity 中找到任何活跃会话。", getStatusKeyboard(lastKnownModel));
+            const buttons = [[{
+                text: '🆕 新建空白会话 (New Chat)',
+                callback_data: 'chat:new'
+            }]];
+            return ctx.reply("⚠️ 当前项目下没有找到任何活跃会话。您可以点击下方按钮开启新会话：", {
+                reply_markup: { inline_keyboard: buttons },
+                parse_mode: 'HTML'
+            });
         }
 
         // Sort by lastModifiedSeconds descending
@@ -1761,6 +2122,25 @@ bot.action(/^model:(.+)$/, async (ctx) => {
 bot.action(/^proj:(.+)$/, async (ctx) => {
     const targetProjIdOrName = ctx.match[1];
     
+    if (targetProjIdOrName === 'create_new_project') {
+        try {
+            await ctx.answerCbQuery().catch(() => {});
+            ctx.deleteMessage(ctx.callbackQuery.message.message_id).catch(() => {});
+            
+            const promptMsg = await ctx.reply("✍️ 请输入新项目的名称（将作为文件夹名，仅限中英文、数字、空格、中划线及下划线）：\n\n新项目文件夹默认建立在根目录 <code>/antigravity</code> 下。\n输入 <code>cancel</code> 或 <code>取消</code> 可中断操作。", {
+                parse_mode: 'HTML'
+            });
+            
+            userStates[ctx.chat.id.toString()] = {
+                action: 'awaiting_new_project_name',
+                promptMsgId: promptMsg.message_id
+            };
+        } catch (e) {
+            ctx.reply(`❌ 触发开启新项目失败: ${e.message}`, getStatusKeyboard(lastKnownModel)).catch(() => {});
+        }
+        return;
+    }
+    
     try {
         await ctx.answerCbQuery("正在尝试切换项目...").catch(() => {});
         ctx.deleteMessage(ctx.callbackQuery.message.message_id).catch(() => {});
@@ -1781,10 +2161,31 @@ bot.action(/^proj:(.+)$/, async (ctx) => {
             
             // If switch succeeded, we update the last known project directly
             lastKnownProject = projDisplayName;
+            
+            // Check if the switched project has any conversations
+            const conversations = await getConversationsViaCDP(CDP_PORT).catch(() => []);
+            
             updatePinnedDashboard().catch(() => {});
             
-            // Automatically trigger the conversation list popup for this new project!
-            await showConversationsMenu(ctx);
+            await ctx.reply(`🟢 已成功切换至项目: <b>${lastKnownProject}</b>`, { parse_mode: 'HTML', ...getStatusKeyboard(lastKnownModel) }).catch(() => {});
+            
+            if (conversations.length === 0) {
+                // Trigger a new chat automatically!
+                const successNewChat = await triggerNewChat(CDP_PORT);
+                if (successNewChat) {
+                    // Reset local tracking so logs watcher anchors on the next message
+                    currentSessionId = null;
+                    currentFilePath = null;
+                    lastFileOffset = 0;
+                    lastKnownChatTitle = '新会话';
+                    await ctx.reply(`🆕 已为您在新项目 <b>${lastKnownProject}</b> 中自动开启了一个全新的会话！您可以直接发送消息开始对话。`, { parse_mode: 'HTML', ...getStatusKeyboard(lastKnownModel) }).catch(() => {});
+                } else {
+                    await ctx.reply(`⚠️ 已切换至新项目，但自动开启新会话失败，您可以在电脑端手动新建，或发送消息尝试。`, getStatusKeyboard(lastKnownModel)).catch(() => {});
+                }
+            } else {
+                // Automatically trigger the conversation list popup for this new project!
+                await showConversationsMenu(ctx);
+            }
             await refreshInputPlaceholder(ctx);
             return;
         }
@@ -1805,32 +2206,145 @@ bot.on('text', async (ctx) => {
 
     const chatId = ctx.chat.id.toString();
     
-    // Intercept status button click (e.g. "Switch & Quota")
-    if (text.toLowerCase() === 'switch & quota' || (text.startsWith('📁') && text.includes('| 💬'))) {
+    // Intercept custom reply keyboard button clicks
+    if (text.includes('📁 P:') && text.includes('💬 C:')) {
         ctx.deleteMessage(ctx.message.message_id).catch(() => {});
+        await showControlMenu(ctx);
+        return;
+    }
+    if (text.startsWith('📁')) {
+        ctx.deleteMessage(ctx.message.message_id).catch(() => {});
+        await showProjectsMenu(ctx);
+        return;
+    }
+    if (text.startsWith('💬')) {
+        ctx.deleteMessage(ctx.message.message_id).catch(() => {});
+        await showConversationsMenu(ctx);
+        return;
+    }
+    if (text.startsWith('🤖')) {
+        ctx.deleteMessage(ctx.message.message_id).catch(() => {});
+        await showModelsMenu(ctx);
+        return;
+    }
+    if (text === '🛠️ 菜单 & Quota' || text.toLowerCase() === 'switch & quota') {
+        ctx.deleteMessage(ctx.message.message_id).catch(() => {});
+        await showControlMenu(ctx);
+        return;
+    }
+
+    // Handle new project name text input state
+    const state = userStates[chatId];
+    if (state && state.action === 'awaiting_new_project_name') {
+        const inputName = text.trim();
         
-        // Show interactive management menu
-        const menuText = `🛠️ <b>控制台管理菜单</b>\n\n您点击了底部的状态栏。请选择您要执行的操作：`;
-        const inlineKeyboard = {
-            reply_markup: {
-                inline_keyboard: [
-                    [
-                        { text: '📁 切换项目 (Project)', callback_data: 'session:show_projects' },
-                        { text: '💬 切换会话 (Chats)', callback_data: 'session:show_chats' }
-                    ],
-                    [
-                        { text: '🤖 切换 AI 模型 (Model)', callback_data: 'session:show_models' },
-                        { text: '💳 查询 Quota (Quota)', callback_data: 'session:show_quota' }
-                    ]
-                ]
+        ctx.deleteMessage(ctx.message.message_id).catch(() => {});
+        if (state.promptMsgId) {
+            ctx.deleteMessage(state.promptMsgId).catch(() => {});
+        }
+        
+        delete userStates[chatId];
+        
+        if (!inputName || inputName.toLowerCase() === 'cancel' || inputName === '取消' || inputName.startsWith('/')) {
+            ctx.reply("⏹️ 开启新项目操作已取消。", getStatusKeyboard(lastKnownModel)).catch(() => {});
+            return;
+        }
+        
+        // Sanitize the folder name
+        const sanitized = inputName.replace(/[\\/:*?"<>|]/g, '').trim();
+        if (!sanitized) {
+            ctx.reply("❌ 项目名称包含非法字符！操作已取消。", getStatusKeyboard(lastKnownModel)).catch(() => {});
+            return;
+        }
+        
+        const parentDir = path.resolve(__dirname, '..', '..');
+        const newProjectPath = path.join(parentDir, sanitized);
+        
+        let folderExisted = false;
+        if (fs.existsSync(newProjectPath)) {
+            folderExisted = true;
+        } else {
+            try {
+                fs.mkdirSync(newProjectPath, { recursive: true });
+            } catch (err) {
+                ctx.reply(`❌ 创建项目文件夹失败: ${err.message}`, getStatusKeyboard(lastKnownModel)).catch(() => {});
+                return;
             }
-        };
-        ctx.reply(menuText, { parse_mode: 'HTML', ...inlineKeyboard });
+        }
+        
+        const actionWord = folderExisted ? "打开已存在的" : "新建并开启";
+        const statusMsg = await ctx.reply(`🚀 正在尝试${actionWord}项目 <b>${sanitized}</b>，请稍候...`, { parse_mode: 'HTML' }).catch(() => {});
+        
+        try {
+            // 1. Check if project is already registered via CDP
+            const projects = await getAvailableProjectsViaCDP(CDP_PORT).catch(() => []);
+            const existing = projects.find(p => p.name.toLowerCase() === sanitized.toLowerCase());
+            
+            let projectId = existing ? existing.uri : null;
+            
+            if (!projectId) {
+                // Register project via CDP
+                projectId = await registerProjectViaCDP(sanitized, newProjectPath, CDP_PORT);
+            }
+            
+            if (!projectId) {
+                throw new Error("无法注册新项目 ID");
+            }
+            
+            // 2. Switch project in-place
+            const success = await switchProjectViaCDP(projectId, CDP_PORT);
+            if (success) {
+                // Wait for switch ready
+                await waitForTargetReady(CDP_PORT, async () => {
+                    const activeProj = await getActiveProjectNameViaCDP(CDP_PORT);
+                    return activeProj && activeProj.toLowerCase() === sanitized.toLowerCase();
+                }, 8000, 250).catch(() => {});
+                
+                const activeProj = await getActiveProjectNameViaCDP(CDP_PORT).catch(() => null);
+                lastKnownProject = activeProj || sanitized;
+                
+                // Check if the switched project has any conversations
+                const conversations = await getConversationsViaCDP(CDP_PORT).catch(() => []);
+                
+                updatePinnedDashboard().catch(() => {});
+                
+                if (statusMsg) {
+                    ctx.deleteMessage(statusMsg.message_id).catch(() => {});
+                }
+                
+                await ctx.reply(`🟢 已成功开启并切换至项目: <b>${lastKnownProject}</b>`, { parse_mode: 'HTML', ...getStatusKeyboard(lastKnownModel) }).catch(() => {});
+                
+                if (conversations.length === 0) {
+                    // Trigger a new chat automatically!
+                    const successNewChat = await triggerNewChat(CDP_PORT);
+                    if (successNewChat) {
+                        // Reset local tracking so logs watcher anchors on the next message
+                        currentSessionId = null;
+                        currentFilePath = null;
+                        lastFileOffset = 0;
+                        lastKnownChatTitle = '新会话';
+                        await ctx.reply(`🆕 已为您在新项目 <b>${lastKnownProject}</b> 中自动开启了一个全新的会话！您可以直接发送消息开始对话。`, { parse_mode: 'HTML', ...getStatusKeyboard(lastKnownModel) }).catch(() => {});
+                    } else {
+                        await ctx.reply(`⚠️ 已切换至新项目，但自动开启新会话失败，您可以在电脑端手动新建，或发送消息尝试。`, getStatusKeyboard(lastKnownModel)).catch(() => {});
+                    }
+                } else {
+                    // Show conversations menu for the new project
+                    await showConversationsMenu(ctx);
+                }
+                await refreshInputPlaceholder(ctx);
+            } else {
+                throw new Error("CDP project switch failed");
+            }
+        } catch (err) {
+            if (statusMsg) {
+                ctx.deleteMessage(statusMsg.message_id).catch(() => {});
+            }
+            ctx.reply(`❌ 开启项目 <b>${sanitized}</b> 失败: ${err.message}`, { parse_mode: 'HTML', ...getStatusKeyboard(lastKnownModel) }).catch(() => {});
+        }
         return;
     }
 
     // Handle session rename text input state
-    const state = userStates[chatId];
     if (state && state.action === 'awaiting_rename') {
         const newTitle = text;
         const convoId = state.conversationId;
@@ -1859,12 +2373,6 @@ bot.on('text', async (ctx) => {
         } catch (e) {
             ctx.reply(`❌ 执行失败: ${e.message}`, getStatusKeyboard(lastKnownModel));
         }
-        return;
-    }
-
-    // Intercept minimalist model / status button
-    if (text === '🤖' || text === '.' || text.startsWith('📁')) {
-        ctx.deleteMessage(ctx.message.message_id).catch(() => {});
         return;
     }
 

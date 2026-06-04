@@ -374,104 +374,143 @@ async function stopAgentViaCDP(port) {
         }
     }
     return false;
-}/**
+}
+
+/**
  * Scans the active page DOM for visible tool permission prompts.
  */
 async function findActiveApproval(port) {
     const candidates = await resolveTargets(port);
-    for (const target of candidates) {
+    
+    // Evaluate candidates in parallel with a tight timeout of 1000ms per target
+    const promises = candidates.map(async (target) => {
         let client;
         try {
-            client = await CDP({ target: target.webSocketDebuggerUrl });
-            const { Runtime } = client;
-            await Runtime.enable();
-            const res = await Runtime.evaluate({
-                expression: `
-                    (() => {
-                        // ANCHOR: Only real Antigravity approval popups have a visible "Skip" button.
-                        // Using it as sole anchor prevents false positives from command history / sidebar.
-                        const allBtns = Array.from(document.querySelectorAll('button, [role="button"], a, div.cursor-pointer, span.cursor-pointer, [class*="btn" i], [class*="button" i]'));
-                        
-                        const skipBtn = allBtns.slice().reverse().find(b => {
-                            const text = (b.textContent || '').replace(/[\\n\\r\\t]/g, ' ').trim().toLowerCase();
-                            const rect = b.getBoundingClientRect();
-                            const isSkip = text === 'skip' || text === '跳过' || text.includes('skip') || text.includes('跳过') || text.includes('atla') || text.includes('pass') || text.includes('skip step');
-                            return isSkip && rect.width > 0 && rect.height > 0 && !b.disabled;
-                        });
-                        
-                        if (!skipBtn) return null;
-                        
-                        // --- CARD RESOLUTION from Skip button ---
-                        let card = skipBtn.closest('[class*="group/run-command"],[class*="group/file-change"],[class*="group/tool-"],[class*="group/edit-file"],[class*="group/tool-call"]');
-                        if (!card) card = skipBtn.closest('[role="dialog"],[class*="dialog"],[class*="modal"],[class*="overlay"],[class*="Radix"],[class*="popup"]');
-                        if (!card) card = skipBtn.closest('[class*="bg-card-border"]');
-                        if (!card) card = skipBtn.closest('[class*="bg-card"]');
-                        if (!card) { const ib = skipBtn.closest('[id*="agentSidePanelInputBox"]'); if (ib) card = ib; }
-                        if (!card) {
-                            let el = skipBtn.parentElement;
-                            for (let i = 0; i < 8 && el && el !== document.body; i++) {
-                                const vis = Array.from(el.querySelectorAll('button,[role="button"]'))
-                                    .filter(b => { const r = b.getBoundingClientRect(); return r.width > 0 && r.height > 0; });
-                                if (vis.length >= 2) { card = el; break; }
-                                el = el.parentElement;
-                            }
-                        }
-                        if (!card) return null;
-                        
-                        // --- EXTRACT ACTION TEXT ---
-                        let actionText = '';
-                        const codeEl = card.querySelector('code, pre, [class*="command"], [class*="terminal"]');
-                        if (codeEl) {
-                            actionText = codeEl.textContent.trim();
-                        } else {
-                            const clone = card.cloneNode(true);
-                            Array.from(clone.querySelectorAll('style,script,button,[role="button"],a')).forEach(el => el.remove());
-                            actionText = clone.textContent.replace(/\\s+/g, ' ').trim().substring(0, 400);
-                        }
-                        
-                        // --- EXTRACT BUTTONS ---
-                        const cardButtons = [];
-                        
-                        // 1. Numbered radio options: "1 Yes, allow this time", "2 Yes, always allow..." etc.
-                        Array.from(card.querySelectorAll('*')).forEach(el => {
-                            const text = (el.textContent || '').replace(/[\\n\\r\\t]/g, ' ').trim();
-                            // Enforce strict prefix matching to avoid false positives like "1 task running"
-                            const isOption = /^[1-9]\\s*(Yes|No|Allow|Don't|Always|Only|是|否|允许|总是|始终|仅|只|同意|拒绝|Evet|Hayır|İzin)/i.test(text);
-                            if (isOption && text.length < 120 && el.children.length <= 3) {
-                                if (!cardButtons.some(cb => cb.text === text)) {
-                                    cardButtons.push({ text, type: 'radio' });
+            const res = await withTimeout((async () => {
+                client = await OriginalCDP({ target: target.webSocketDebuggerUrl });
+                const { Runtime } = client;
+                await Runtime.enable();
+                const evalRes = await Runtime.evaluate({
+                    expression: `
+                        (() => {
+                            // ANCHOR: Broaden the anchor search to include ANY active approval button (Approve, Reject, Skip, Allow, Deny, Yes, No, Submit, Confirm, etc.).
+                            const allBtns = Array.from(document.querySelectorAll('button, [role="button"], a, div.cursor-pointer, span.cursor-pointer, [class*="btn" i], [class*="button" i]'));
+                            
+                            const anchorBtn = allBtns.slice().reverse().find(b => {
+                                const text = (b.textContent || '').replace(/[\\n\\r\\t]/g, ' ').trim().toLowerCase();
+                                const ariaLabel = (b.getAttribute('aria-label') || '').trim().toLowerCase();
+                                const rect = b.getBoundingClientRect();
+                                
+                                // Exclude input box elements to avoid matching chat input send button
+                                if (b.closest && b.closest('.interactive-input-editor, .chat-input, #conversation textarea, .agentSidePanelInputBox, #antigravity')) {
+                                    return false;
+                                }
+                                
+                                const approvalKeywords = [
+                                    'approve', 'reject', 'allow', 'deny', 'yes, allow', 'always allow', 'skip', 'skip step', 'submit', 'confirm', 'run', 'accept', 'yes', 'no', 'cancel',
+                                    '同意', '拒绝', '允许', '跳过', '取消', '确定', '确认', '提交', '执行', '运行', '是', '否', 'allow this time', 'yes, allow this time'
+                                ];
+                                
+                                const isApproval = approvalKeywords.some(k => text === k || text.includes(k) || ariaLabel === k || ariaLabel.includes(k));
+                                return isApproval && rect.width > 0 && rect.height > 0 && !b.disabled;
+                            });
+                            
+                            if (!anchorBtn) return null;
+                            
+                            // --- CARD RESOLUTION from Anchor button ---
+                            let card = anchorBtn.closest('[class*="group/run-command"],[class*="group/file-change"],[class*="group/tool-"],[class*="group/edit-file"],[class*="group/tool-call"]');
+                            if (!card) card = anchorBtn.closest('[role="dialog"],[class*="dialog"],[class*="modal"],[class*="overlay"],[class*="Radix"],[class*="popup"]');
+                            if (!card) card = anchorBtn.closest('[class*="bg-card-border"]');
+                            if (!card) card = anchorBtn.closest('[class*="bg-card"]');
+                            if (!card) { const ib = anchorBtn.closest('[id*="agentSidePanelInputBox"]'); if (ib) card = ib; }
+                            if (!card) {
+                                let el = anchorBtn.parentElement;
+                                for (let i = 0; i < 8 && el && el !== document.body; i++) {
+                                    const vis = Array.from(el.querySelectorAll('button,[role="button"]'))
+                                        .filter(b => { const r = b.getBoundingClientRect(); return r.width > 0 && r.height > 0; });
+                                    if (vis.length >= 2) { card = el; break; }
+                                    el = el.parentElement;
                                 }
                             }
-                        });
-                        
-                        // 2. Skip button (exposed so user can choose to skip from phone)
-                        const skipText = (skipBtn.textContent || '').replace(/[\\n\\r\\t]/g, ' ').trim();
-                        if (skipText && !cardButtons.some(cb => cb.text === skipText)) {
-                            cardButtons.push({ text: skipText, type: 'button' });
-                        }
-                        
-                        // If no buttons found, suppress notification
-                        if (cardButtons.length === 0) return null;
-                        
-                        // Clean up actionText from any button texts to avoid duplicating them in the details section
-                        cardButtons.forEach(btn => {
-                            actionText = actionText.split(btn.text).join('');
-                        });
-                        actionText = actionText.replace(/\\s+/g, ' ').trim();
-                        
-                        const path = skipBtn.className.substring(0, 60) + ':' + actionText.substring(0, 60);
-                        return { found: true, actionText, buttons: cardButtons, path };
-                    })()
-                `,
-                returnByValue: true
-            });
-            await client.close();
-            if (res.result?.value) return res.result.value;
+                            if (!card) return null;
+                            
+                            // --- EXTRACT ACTION TEXT ---
+                            let actionText = '';
+                            const codeEl = card.querySelector('code, pre, [class*="command"], [class*="terminal"]');
+                            if (codeEl) {
+                                actionText = codeEl.textContent.trim();
+                            } else {
+                                const clone = card.cloneNode(true);
+                                Array.from(clone.querySelectorAll('style,script,button,[role="button"],a')).forEach(el => el.remove());
+                                actionText = clone.textContent.replace(/\\s+/g, ' ').trim().substring(0, 400);
+                            }
+                            
+                            // --- EXTRACT BUTTONS ---
+                            const cardButtons = [];
+                            
+                            // 1. Numbered radio options: "1 Yes, allow this time", "2 Yes, always allow..." etc.
+                            Array.from(card.querySelectorAll('*')).forEach(el => {
+                                const text = (el.textContent || '').replace(/[\\n\\r\\t]/g, ' ').trim();
+                                const isOption = /^[1-9]\\s*(Yes|No|Allow|Don't|Always|Only|是|否|允许|总是|始终|仅|只|同意|拒绝|Evet|Hayır|İzin)/i.test(text);
+                                if (isOption && text.length < 120 && el.children.length <= 3) {
+                                    if (!cardButtons.some(cb => cb.text === text)) {
+                                        cardButtons.push({ text, type: 'radio' });
+                                    }
+                                }
+                            });
+                            
+                            // 2. Action buttons
+                            const actionKeywords = [
+                                'approve', 'reject', 'allow', 'deny', 'yes', 'no', 'cancel', 'skip', 'submit', 'confirm', 'run', 'accept',
+                                '同意', '拒绝', '允许', '跳过', '取消', '确定', '确认', '提交', '执行'
+                            ];
+                            const allCardBtns = Array.from(card.querySelectorAll('button, [role="button"], a, div.cursor-pointer, span.cursor-pointer, [class*="btn" i], [class*="button" i]'));
+                            allCardBtns.forEach(b => {
+                                const text = (b.textContent || '').replace(/[\\n\\r\\t]/g, ' ').trim();
+                                const textLower = text.toLowerCase();
+                                const rect = b.getBoundingClientRect();
+                                const isAction = actionKeywords.some(k => textLower === k || textLower.includes(k));
+                                if (isAction && rect.width > 0 && rect.height > 0 && !b.disabled) {
+                                    if (!cardButtons.some(cb => cb.text === text)) {
+                                        cardButtons.push({ text, type: 'button' });
+                                    }
+                                }
+                            });
+                            
+                            if (cardButtons.length === 0) return null;
+                            
+                            cardButtons.forEach(btn => {
+                                actionText = actionText.split(btn.text).join('');
+                            });
+                            actionText = actionText.replace(/\\s+/g, ' ').trim();
+                            
+                            const classNameStr = typeof anchorBtn.className === 'string' ? anchorBtn.className : (anchorBtn.getAttribute('class') || '');
+                            const path = classNameStr.substring(0, 60) + ':' + actionText.substring(0, 60);
+                            return { found: true, actionText, buttons: cardButtons, path };
+                        })()
+                    `,
+                    returnByValue: true
+                });
+                return evalRes.result?.value || null;
+            })(), 1000, "findActiveApproval target check timeout");
+            return res;
         } catch (e) {
-            try { if (client) await client.close(); } catch(_) {}
+            return null;
+        } finally {
+            if (client) {
+                try { await client.close(); } catch (_) {}
+            }
         }
+    });
+
+    try {
+        const results = await Promise.all(promises);
+        const valid = results.find(r => r && r.found);
+        return valid || null;
+    } catch (err) {
+        console.error('[findActiveApproval] Error checking targets in parallel:', err.message);
+        return null;
     }
-    return null;
 }
 
 /**
@@ -479,114 +518,116 @@ async function findActiveApproval(port) {
  */
 async function respondToApproval(port, action) {
     const candidates = await resolveTargets(port);
-    for (const target of candidates) {
+    
+    // Evaluate candidates in parallel with a timeout of 2000ms
+    const promises = candidates.map(async (target) => {
         let client;
         try {
-            client = await CDP({ target: target.webSocketDebuggerUrl });
-            const { Runtime } = client;
-            await Runtime.enable();
-            const res = await Runtime.evaluate({
-                expression: `
-                    (() => {
-                        const allButtons = Array.from(document.querySelectorAll('button, [role="button"], a, div.cursor-pointer, span.cursor-pointer, [class*="btn" i], [class*="button" i]'));
-                        
-                        // Find the ACTIVE submit/skip anchor button to locate the card
-                        const anchorKeywords = [
-                            'submit', 'skip', '提交', '跳过', 'confirm', '确定', '确认',
-                            'yes, allow', 'yes', 'run', 'accept', 'approve', 'allow', '允许', '同意'
-                        ];
-                        const anchorBtn = allButtons.slice().reverse().find(b => {
-                            const text = (b.textContent || '').replace(/[\\n\\r\\t]/g, '').trim().toLowerCase();
-                            const ariaLabel = (b.getAttribute('aria-label') || '').trim().toLowerCase();
-                            const rect = b.getBoundingClientRect();
-                            const isMatch = anchorKeywords.some(k =>
-                                text === k || text.includes(k) ||
-                                ariaLabel === k || ariaLabel.includes(k)
-                            );
-                            return isMatch && rect.width > 0 && rect.height > 0 && !b.disabled;
-                        });
-                        
-                        if (!anchorBtn) return { clicked: false, reason: 'No anchor button found' };
-                        
-                        // --- SAME card-resolution as findActiveApproval ---
-                        let card = anchorBtn.closest('[class*="group/run-command"],[class*="group/file-change"],[class*="group/tool-"],[class*="group/edit-file"],[class*="group/tool-call"]');
-                        if (!card) card = anchorBtn.closest('[role="dialog"],[class*="dialog"],[class*="modal"],[class*="overlay"],[class*="Radix"],[class*="popup"]');
-                        if (!card) card = anchorBtn.closest('[class*="bg-card-border"]');
-                        if (!card) card = anchorBtn.closest('[class*="bg-card"]');
-                        if (!card) {
-                            const ib = anchorBtn.closest('[id*="agentSidePanelInputBox"]');
-                            if (ib) card = ib;
-                        }
-                        if (!card) {
-                            let el = anchorBtn.parentElement;
-                            for (let i = 0; i < 8 && el && el !== document.body; i++) {
-                                const vis = Array.from(el.querySelectorAll('button,[role="button"]')).filter(b => { const r = b.getBoundingClientRect(); return r.width > 0 && r.height > 0; });
-                                if (vis.length >= 2) { card = el; break; }
-                                el = el.parentElement;
-                            }
-                        }
-                        
-                        if (!card) return { clicked: false, reason: 'No card container found' };
-                        
-                        const targetText = ${JSON.stringify(action.trim().toLowerCase())};
-                        
-                        // Case A: numbered radio option ("1", "2 yes...", "3 no..." etc.)
-                        if (/^[1-9]/.test(targetText)) {
-                            const optionNum = targetText.match(/^([1-9])/)[1];
-                            // Search ALL elements in card for one whose direct text starts with that number and matches radio criteria
-                            const allEls = Array.from(card.querySelectorAll('*'));
-                            const optionEl = allEls.find(el => {
-                                const txt = (el.textContent || '').replace(/[\\n\\r\\t]/g, ' ').trim().toLowerCase();
-                                const isOption = /^[1-9]\\s*(Yes|No|Allow|Don't|Always|Only|是|否|允许|总是|始终|仅|只|同意|拒绝|Evet|Hayır|İzin)/i.test(txt);
-                                return txt.startsWith(optionNum) && isOption && el.children.length <= 3 && txt.length < 150;
+            const success = await withTimeout((async () => {
+                client = await OriginalCDP({ target: target.webSocketDebuggerUrl });
+                const { Runtime } = client;
+                await Runtime.enable();
+                const res = await Runtime.evaluate({
+                    expression: `
+                        (() => {
+                            const allButtons = Array.from(document.querySelectorAll('button, [role="button"], a, div.cursor-pointer, span.cursor-pointer, [class*="btn" i], [class*="button" i]'));
+                            
+                            const anchorKeywords = [
+                                'submit', 'skip', '提交', '跳过', 'confirm', '确定', '确认',
+                                'yes, allow', 'yes', 'run', 'accept', 'approve', 'allow', '允许', '同意', 'cancel', '取消', 'reject', '拒绝', 'deny', 'no', '否'
+                            ];
+                            const anchorBtn = allButtons.slice().reverse().find(b => {
+                                const text = (b.textContent || '').replace(/[\\n\\r\\t]/g, '').trim().toLowerCase();
+                                const ariaLabel = (b.getAttribute('aria-label') || '').trim().toLowerCase();
+                                const rect = b.getBoundingClientRect();
+                                const isMatch = anchorKeywords.some(k =>
+                                    text === k || text.includes(k) ||
+                                    ariaLabel === k || ariaLabel.includes(k)
+                                );
+                                return isMatch && rect.width > 0 && rect.height > 0 && !b.disabled;
                             });
                             
-                            if (optionEl) {
-                                // Try clicking a radio input inside, otherwise click the element itself
-                                const radio = optionEl.querySelector('input[type="radio"],[role="radio"]') || optionEl;
-                                radio.click();
-                                // Find the Submit button specifically and click it after delay
-                                const submitBtn = Array.from(card.querySelectorAll('button,[role="button"]')).find(b => {
-                                    const t = (b.textContent||'').replace(/[\\n\\r\\t]/g,' ').trim().toLowerCase();
-                                    return (t === 'submit' || t.startsWith('submit')) && b.getBoundingClientRect().width > 0;
-                                }) || anchorBtn;
-                                setTimeout(() => submitBtn.click(), 200);
-                                return { clicked: true, method: 'radio', option: optionNum };
+                            if (!anchorBtn) return { clicked: false, reason: 'No anchor button found' };
+                            
+                            let card = anchorBtn.closest('[class*="group/run-command"],[class*="group/file-change"],[class*="group/tool-"],[class*="group/edit-file"],[class*="group/tool-call"]');
+                            if (!card) card = anchorBtn.closest('[role="dialog"],[class*="dialog"],[class*="modal"],[class*="overlay"],[class*="Radix"],[class*="popup"]');
+                            if (!card) card = anchorBtn.closest('[class*="bg-card-border"]');
+                            if (!card) card = anchorBtn.closest('[class*="bg-card"]');
+                            if (!card) {
+                                const ib = anchorBtn.closest('[id*="agentSidePanelInputBox"]');
+                                if (ib) card = ib;
                             }
-                            // Fallback: couldn't find the option element; just click Submit
-                            anchorBtn.click();
-                            return { clicked: true, method: 'submit-fallback', option: optionNum };
-                        }
-                        
-                        // Case B: named button ("skip", "submit", "approve", etc.)
-                        const allCardBtns = Array.from(card.querySelectorAll('button,[role="button"],a,div.cursor-pointer,span.cursor-pointer'));
-                        const btn = allCardBtns.slice().reverse().find(b => {
-                            const t = (b.textContent||'').replace(/[\\n\\r\\t]/g,' ').trim().toLowerCase();
-                            const al = (b.getAttribute('aria-label')||'').toLowerCase();
-                            const rect = b.getBoundingClientRect();
-                            return (t === targetText || t.includes(targetText) || al.includes(targetText))
-                                && rect.width > 0 && rect.height > 0 && !b.disabled;
-                        });
-                        
-                        if (btn) { btn.click(); return { clicked: true, method: 'named-button', target: targetText }; }
-                        
-                        return { clicked: false, reason: 'Button "' + targetText + '" not found in card' };
-                    })()
-                `,
-                returnByValue: true
-            });
-            await client.close();
-            const val = res.result?.value;
-            if (val) {
-                console.log('[respondToApproval]', JSON.stringify(val));
-                if (val.clicked) return true;
-            }
+                            if (!card) {
+                                let el = anchorBtn.parentElement;
+                                for (let i = 0; i < 8 && el && el !== document.body; i++) {
+                                    const vis = Array.from(el.querySelectorAll('button,[role="button"]')).filter(b => { const r = b.getBoundingClientRect(); return r.width > 0 && r.height > 0; });
+                                    if (vis.length >= 2) { card = el; break; }
+                                    el = el.parentElement;
+                                }
+                            }
+                            
+                            if (!card) return { clicked: false, reason: 'No card container found' };
+                            
+                            const targetText = ${JSON.stringify(action.trim().toLowerCase())};
+                            
+                            if (/^[1-9]/.test(targetText)) {
+                                const optionNum = targetText.match(/^([1-9])/)[1];
+                                const allEls = Array.from(card.querySelectorAll('*'));
+                                const optionEl = allEls.find(el => {
+                                    const txt = (el.textContent || '').replace(/[\\n\\r\\t]/g, ' ').trim().toLowerCase();
+                                    const isOption = /^[1-9]\\s*(Yes|No|Allow|Don't|Always|Only|是|否|允许|总是|始终|仅|只|同意|拒绝|Evet|Hayır|İzin)/i.test(txt);
+                                    return txt.startsWith(optionNum) && isOption && el.children.length <= 3 && txt.length < 150;
+                                });
+                                
+                                if (optionEl) {
+                                    const radio = optionEl.querySelector('input[type="radio"],[role="radio"]') || optionEl;
+                                    radio.click();
+                                    const submitBtn = Array.from(card.querySelectorAll('button,[role="button"]')).find(b => {
+                                        const t = (b.textContent||'').replace(/[\\n\\r\\t]/g,' ').trim().toLowerCase();
+                                        return (t === 'submit' || t.startsWith('submit')) && b.getBoundingClientRect().width > 0;
+                                    }) || anchorBtn;
+                                    setTimeout(() => submitBtn.click(), 200);
+                                    return { clicked: true, method: 'radio', option: optionNum };
+                                }
+                                anchorBtn.click();
+                                return { clicked: true, method: 'submit-fallback', option: optionNum };
+                            }
+                            
+                            const allCardBtns = Array.from(card.querySelectorAll('button,[role="button"],a,div.cursor-pointer,span.cursor-pointer'));
+                            const btn = allCardBtns.slice().reverse().find(b => {
+                                const t = (b.textContent||'').replace(/[\\n\\r\\t]/g,' ').trim().toLowerCase();
+                                const al = (b.getAttribute('aria-label')||'').toLowerCase();
+                                const rect = b.getBoundingClientRect();
+                                return (t === targetText || t.includes(targetText) || al.includes(targetText))
+                                    && rect.width > 0 && rect.height > 0 && !b.disabled;
+                            });
+                            
+                            if (btn) { btn.click(); return { clicked: true, method: 'named-button', target: targetText }; }
+                            return { clicked: false, reason: 'Button "' + targetText + '" not found in card' };
+                        })()
+                    `,
+                    returnByValue: true
+                });
+                const val = res.result?.value;
+                return !!(val && val.clicked);
+            })(), 2000, "respondToApproval target timeout");
+            return success;
         } catch (e) {
-            console.error('[respondToApproval] error:', e.message);
-            try { if (client) await client.close(); } catch(_) {}
+            return false;
+        } finally {
+            if (client) {
+                try { await client.close(); } catch (_) {}
+            }
         }
+    });
+
+    try {
+        const results = await Promise.all(promises);
+        return results.some(r => r === true);
+    } catch (err) {
+        console.error('[respondToApproval] Error executing in parallel:', err.message);
+        return false;
     }
-    return false;
 }
 
 /**
@@ -1609,11 +1650,99 @@ async function getRunningTasksViaCDP(port) {
     }
 }
 
+function setPreferredTargetId(id) {
+    preferredTargetId = id;
+    console.log(`[cdp_controller] preferredTargetId set to: ${id}`);
+}
+
+async function registerProjectViaCDP(projectName, folderPath, port) {
+    const candidates = await resolveTargets(port);
+    if (candidates.length === 0) return null;
+    
+    let client;
+    try {
+        client = await CDP({ target: candidates[0].webSocketDebuggerUrl });
+        const { Runtime } = client;
+        await Runtime.enable();
+        
+        const formattedPath = folderPath.replace(/\\/g, '/');
+        const encodedPath = encodeURIComponent(formattedPath).replace(/%2F/g, '/');
+        const folderUri = "file:///" + encodedPath;
+        
+        const res = await Runtime.evaluate({
+            expression: `
+                (async () => {
+                    const roots = Array.from(document.querySelectorAll('#root, #app, body > div'));
+                    let syncedState = null;
+                    for (const root of roots) {
+                        const key = Object.keys(root).find(k => k.startsWith('__reactContainer') || k.startsWith('__reactFiber'));
+                        if (key) {
+                            let fiber = root[key];
+                            let current = fiber;
+                            for (let i = 0; i < 20; i++) {
+                                if (current && current.pendingProps && current.pendingProps.syncedState) {
+                                    syncedState = current.pendingProps.syncedState;
+                                    break;
+                                }
+                                current = current ? current.child : null;
+                            }
+                            if (syncedState) break;
+                        }
+                    }
+                    if (!syncedState || !syncedState.sidebarSectionsProvider) throw new Error("syncedState or sidebarSectionsProvider not found");
+                    const pm = syncedState.sidebarSectionsProvider.projectManagementFeature;
+                    if (!pm) throw new Error("projectManagementFeature not found");
+                    
+                    const projectId = crypto.randomUUID();
+                    const projectObject = {
+                        id: projectId,
+                        name: ${JSON.stringify(projectName)},
+                        projectResources: {
+                            resources: [
+                                {
+                                    type: {
+                                        case: "folderUri",
+                                        value: ${JSON.stringify(folderUri)}
+                                    }
+                                }
+                            ]
+                        },
+                        settings: {
+                            fileAccessPolicy: 2,
+                            internetPolicy: 2,
+                            sandboxMode: false,
+                            autoExecutionPolicy: 1,
+                            artifactReviewMode: 1
+                        }
+                    };
+                    
+                    await pm.createProject(projectObject);
+                    return projectId;
+                })()
+            `,
+            awaitPromise: true,
+            returnByValue: true
+        });
+        
+        await client.close();
+        if (res.exceptionDetails) {
+            throw new Error(res.exceptionDetails.exception.description || "Evaluation exception");
+        }
+        return res.result?.value || null;
+    } catch (e) {
+        console.error('[registerProjectViaCDP] Failed:', e.message);
+        try { if (client) await client.close(); } catch(_) {}
+        throw e;
+    }
+}
+
 module.exports = {
     sendViaCDP,
     triggerNewChat,
     captureFullIDEScreenshot,
     resolveTargets,
+    setPreferredTargetId,
+    registerProjectViaCDP,
     selectModelViaCDP,
     stopAgentViaCDP,
     findActiveApproval,
