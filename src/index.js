@@ -288,6 +288,14 @@ function getModelShortName(modelName) {
     const lower = modelName.toLowerCase();
     
     // Callback value mappings
+    if (lower === '3.6 flash (high)') return 'g3.6 f high';
+    if (lower === '3.6 flash (medium)') return 'g3.6 f med';
+    if (lower === '3.6 flash (low)') return 'g3.6 f low';
+    if (lower === '3.5 flash (high)') return 'g3.5 f high';
+    if (lower === '3.5 flash (medium)') return 'g3.5 f med';
+    if (lower === '3.5 flash (low)') return 'g3.5 f low';
+    if (lower === '3.1 pro (high)') return 'g3.1 p high';
+    if (lower === '3.1 pro (low)') return 'g3.1 p low';
     if (lower === 'flash (high)') return 'g3.5 f high';
     if (lower === 'flash (medium)') return 'g3.5 f med';
     if (lower === 'pro (high)') return 'g3.1 p high';
@@ -297,8 +305,12 @@ function getModelShortName(modelName) {
     if (lower === 'gpt-oss') return 'gpt-oss 120b';
     
     // Explicit mappings
+    if (lower.includes('gemini 3.6 flash') && lower.includes('high')) return 'g3.6 f high';
+    if (lower.includes('gemini 3.6 flash') && lower.includes('medium')) return 'g3.6 f med';
+    if (lower.includes('gemini 3.6 flash') && lower.includes('low')) return 'g3.6 f low';
     if (lower.includes('gemini 3.5 flash') && lower.includes('high')) return 'g3.5 f high';
     if (lower.includes('gemini 3.5 flash') && lower.includes('medium')) return 'g3.5 f med';
+    if (lower.includes('gemini 3.5 flash') && lower.includes('low')) return 'g3.5 f low';
     if (lower.includes('gemini 3.1 pro') && lower.includes('high')) return 'g3.1 p high';
     if (lower.includes('gemini 3.1 pro') && lower.includes('low')) return 'g3.1 p low';
     if (lower.includes('claude sonnet') && lower.includes('thinking')) return 'c4.6 s think';
@@ -1624,19 +1636,25 @@ const modelKeyboard = {
     reply_markup: {
         inline_keyboard: [
             [
-                { text: '⚡ Gemini 3.5 Flash (High)', callback_data: 'model:flash (high)' },
-                { text: '⚡ Gemini 3.5 Flash (Medium)', callback_data: 'model:flash (medium)' }
+                { text: '⚡ G3.6 Flash (High)', callback_data: 'model:3.6 flash (high)' },
+                { text: '⚡ G3.6 Flash (Med)', callback_data: 'model:3.6 flash (medium)' },
+                { text: '⚡ G3.6 Flash (Low)', callback_data: 'model:3.6 flash (low)' }
             ],
             [
-                { text: '🧠 Gemini 3.1 Pro (High)', callback_data: 'model:pro (high)' },
-                { text: '🧠 Gemini 3.1 Pro (Low)', callback_data: 'model:pro (low)' }
+                { text: '✨ G3.5 Flash (High)', callback_data: 'model:3.5 flash (high)' },
+                { text: '✨ G3.5 Flash (Med)', callback_data: 'model:3.5 flash (medium)' },
+                { text: '✨ G3.5 Flash (Low)', callback_data: 'model:3.5 flash (low)' }
             ],
             [
-                { text: '🚀 Claude Sonnet 4.6 (Thinking)', callback_data: 'model:sonnet' },
-                { text: '🚀 Claude Opus 4.6 (Thinking)', callback_data: 'model:opus' }
+                { text: '🧠 G3.1 Pro (High)', callback_data: 'model:3.1 pro (high)' },
+                { text: '🧠 G3.1 Pro (Low)', callback_data: 'model:3.1 pro (low)' }
             ],
             [
-                { text: '🤖 GPT-OSS 120B (Medium)', callback_data: 'model:gpt-oss' }
+                { text: '🚀 Sonnet 4.6 (Think)', callback_data: 'model:sonnet' },
+                { text: '🚀 Opus 4.6 (Think)', callback_data: 'model:opus' }
+            ],
+            [
+                { text: '🤖 GPT-OSS 120B (Med)', callback_data: 'model:gpt-oss' }
             ]
         ]
     }
